@@ -1,4 +1,4 @@
-namespace SimFell;
+namespace SimFell.Sim;
 
 public static class SimRandom
 {
@@ -35,6 +35,7 @@ public static class SimRandom
     /// A double-precision floating point number that is greater than or equal to 0.0, and less than 1.0.
     /// </returns>
     public static double NextDouble() => _random.NextDouble();
+
     /// <summary>
     /// Returns a random integer that is within a specified range.
     /// </summary>
@@ -46,6 +47,7 @@ public static class SimRandom
     /// values includes minValue but not maxValue. If minValue equals maxValue, minValue is returned
     /// </returns>
     public static int Next(int min, int max) => _random.Next(min, max);
+
     /// <summary>
     /// Returns a bool based on a given chance against NextDouble().
     /// </summary>

@@ -1,4 +1,7 @@
-namespace SimFell.SimmyRewrite;
+using SimFell.Base;
+using SimFell.Engine.Base;
+
+namespace SimFell.Sim;
 
 public class SimAction
 {
@@ -9,7 +12,7 @@ public class SimAction
     public bool CanExecute(Unit unit)
     {
         // A: Check if spell can be cast (defaulting to true for now)
-        if (!Spell.CheckCanCast(unit))
+        if (!Spell.IsReady(unit))
             return false;
 
         // B: Check the condition

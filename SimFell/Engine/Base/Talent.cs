@@ -1,16 +1,16 @@
-using SimFell.Logging;
+using SimFell.Base;
 
-namespace SimFell;
+namespace SimFell.Engine.Base;
 
 public class Talent : CharacterEffect<Talent>
 {
-    public string Id { get; }
+    public string ID { get; }
     public string Name { get; }
     public string GridPos { get; }
 
     public Talent(string id, string name, string gridPos)
     {
-        Id = id;
+        ID = id.Replace("-", "_");
         Name = name;
         GridPos = gridPos;
     }
@@ -20,7 +20,7 @@ public class Talent : CharacterEffect<Talent>
         Action<Unit>? onDeactivate = null)
     {
         //ConsoleLogger.Log(SimulationLogLevel.Error, "Talent Deprecated. Use other constructor.");
-        Id = id;
+        ID = id;
         Name = name;
         GridPos = gridPos;
         OnActivate = onActivate;

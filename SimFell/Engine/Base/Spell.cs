@@ -1,271 +1,228 @@
-using System.Runtime.InteropServices;
+using SimFell.Base;
 using SimFell.Logging;
-using SimFell.Engine.Base;
+using SimSharp;
 
-namespace SimFell;
+namespace SimFell.Engine.Base;
 
 public class Spell
 {
-    public string ID { get; private set; }
-    public string Name { get; set; }
-    private Stat Cooldown { get; set; }
-
-    public double OffCooldown;
-    public Stat CastTime { get; set; }
-    public bool Channel { get; set; } //When the spell is a channeled spell.
-    public Stat ChannelTime { get; set; } = new Stat(0);
-    public Stat TickRate { get; set; }
-    public Stat TravelTime { get; set; } = new Stat(0.000001);
-    public bool HasGCD { get; set; }
-    public double GCD { get; set; }
-    public bool HastedGCD { get; set; }
-    public bool CanCastWhileCasting { get; set; }
-    public bool HasAntiSpam { get; set; }
-    public bool HasteEffectsCoolodwn { get; set; }
-    public bool HasteEffectsChannel { get; set; }
-    public int Charges { get; private set; }
-    public int MaxCharges { get; set; }
-    public Action<Unit, Spell, List<Unit>>? OnCast { get; set; }
-    public Action<Unit, Spell>? OnCastingCost { get; set; }
-    public Action<Unit, Spell, List<Unit>>? OnTick { get; set; }
-    public Func<Unit, Spell, bool>? CanCast { get; set; }
-
-    //Modifiers, used typically with Talents.
-    public Stat DamageModifiers { get; set; } = new Stat(0);
-    public Stat CritModifiers { get; set; } = new Stat(0);
-
-    public Stat ResourceCostModifiers { get; set; } = new Stat(0);
-
-    private bool overridesGCD = false;
-
-    public Spell(string id, string name, double cooldown = 0, double castTime = 0)
+    public Spell(string id, string name, double cooldown, double castTime)
     {
         ID = id.Replace("-", "_");
         Name = name;
         Cooldown = new Stat(cooldown);
         CastTime = new Stat(castTime);
-
-        // Default valeus for all spells unless defined otherwise.
-        Channel = false;
-        HasGCD = true;
-        CanCastWhileCasting = false;
-        HasAntiSpam = false;
-        HasteEffectsCoolodwn = false;
-
+        TravelTime = new Stat(0);
+        OffCooldown = DateTime.MinValue;
         Charges = 1;
         MaxCharges = 1;
+        TriggersGCD = true;
+        _hastedCastTime = true;
+        _hastedCooldown = false;
     }
 
-    public Spell WithOnCast(Action<Unit, Spell, List<Unit>> onCast)
+    // Configuration
+    public string ID { get; }
+    public string Name { get; }
+    public Stat CastTime { get; } // in seconds
+    public Stat Cooldown { get; } // in seconds
+    public Stat TravelTime { get; set; } // in seconds
+    public bool CanCastWhileCasting { get; set; }
+    public bool CanCastWhileGCD { get; set; }
+    public bool TriggersGCD { get; set; }
+    public int Charges { get; protected set; }
+    public int MaxCharges { get; set; }
+
+    // Stat Mods.
+    public Stat DamageModifiers { get; set; } = new Stat(0);
+    public Stat CritModifiers { get; set; } = new Stat(0);
+    public Stat ResourceCostModifiers { get; set; } = new Stat(0);
+
+    // Additional
+    public DateTime OffCooldown = DateTime.MinValue; // DateTime is correct for Simulation.Now
+    public Action<Unit, Spell, Unit>? OnCast;
+
+    // Privates
+    private bool _cooldownProcessStarted = false;
+    private bool _hastedCooldown = false;
+    private bool _hastedCastTime = true;
+    private Action<Unit, Spell, Unit> _spellEvent;
+    private Action<Unit, Spell> _castingCostEvent;
+    private Func<Unit, Spell, bool> _canCastFunc;
+
+    private Process _castProcess;
+    private Process _cooldownProcess;
+    private DateTime _cooldownProcessStartTime;
+
+    public bool IsReady(Unit caster)
     {
-        OnCast = onCast;
+        return Charges > 0 && (_canCastFunc?.Invoke(caster, this) ?? true);
+    }
+
+    public virtual void Cast(Unit caster, Unit target)
+    {
+        caster.StartCasting();
+        // Trigger GCD
+        if (TriggersGCD) caster.TriggerGCD();
+        ConsoleLogger.Log(
+            SimulationLogLevel.CastEvents,
+            $"Casting [bold blue]{Name}[/]"
+        );
+        if (CastTime.GetValue() == 0)
+        {
+            Charges--;
+            ScheduleCooldown(caster);
+        }
+
+        _castProcess = caster.Simulator.Env.Process(CastProcess(caster, target));
+    }
+
+    protected virtual IEnumerable<Event> CastProcess(Unit caster, Unit target)
+    {
+        // Cast times are snapshotted.
+        double castTime = CastTime.GetValue();
+        castTime = _hastedCastTime ? caster.GetHastedValue(castTime) : castTime;
+        if (castTime > 0)
+            yield return caster.Simulator.Env.Timeout(TimeSpan.FromSeconds(castTime));
+        CastComplete(caster, target, true);
+
+        if (TravelTime.GetValue() > 0)
+            yield return caster.Simulator.Env.Timeout(TimeSpan.FromSeconds(TravelTime.GetValue()));
+        TriggerSpellEvent(caster, target);
+    }
+
+    protected void CastComplete(Unit caster, Unit target, bool scheduleCoolDown)
+    {
+        // Spell cooldown
+        if (scheduleCoolDown)
+        {
+            Charges--;
+            ScheduleCooldown(caster);
+        }
+
+        // Trigger On Casting Done Events.
+        OnCast?.Invoke(caster, this, target);
+        _castingCostEvent?.Invoke(caster, this);
+        caster.OnCastDone?.Invoke(caster, this, target);
+        caster.FinishCasting();
+
+        ConsoleLogger.Log(
+            SimulationLogLevel.CastEvents,
+            $"Finished Casting [bold blue]{Name}[/]");
+    }
+
+    public void TriggerSpellEvent(Unit caster, Unit target)
+    {
+        _spellEvent?.Invoke(caster, this, target);
+    }
+
+    protected void ScheduleCooldown(Unit caster)
+    {
+        if (_cooldownProcessStarted) return;
+        _cooldownProcessStartTime = caster.Simulator.Now;
+
+        UpdateOffCooldown(caster);
+        _cooldownProcess = caster.Simulator.Env.Process(CooldownProcess(caster));
+    }
+
+    private void UpdateOffCooldown(Unit caster)
+    {
+        double cooldownDuration = Cooldown.GetValue();
+        cooldownDuration = _hastedCooldown ? caster.GetHastedValue(cooldownDuration) : cooldownDuration;
+        OffCooldown = _cooldownProcessStartTime + TimeSpan.FromSeconds(cooldownDuration);
+    }
+
+    private IEnumerable<Event> CooldownProcess(Unit caster)
+    {
+        _cooldownProcessStarted = true;
+        void OnHasteChanged() => _cooldownProcess?.Interrupt();
+        if (_hastedCooldown)
+        {
+            caster.HasteStat.OnModifierAdded += OnHasteChanged;
+            caster.HasteStat.OnModifierRemoved += OnHasteChanged;
+        }
+
+        while (caster.Simulator.Env.Now < OffCooldown)
+        {
+            UpdateOffCooldown(caster);
+            TimeSpan remaining = OffCooldown - caster.Simulator.Env.Now;
+            if (remaining > TimeSpan.Zero) yield return caster.Simulator.Env.Timeout(remaining);
+
+            if (_cooldownProcess.HandleFault()) continue; // Called whenever a CDR event happens.
+        }
+
+        _cooldownProcessStarted = false;
+        if (Charges < MaxCharges) Charges++;
+        if (Charges < MaxCharges) ScheduleCooldown(caster);
+    }
+
+    public void UpdateCooldown(Unit caster, double deltaTime)
+    {
+        if (OffCooldown > caster.Simulator.Env.Now)
+        {
+            _cooldownProcessStartTime -= TimeSpan.FromSeconds(deltaTime);
+            if (_cooldownProcess != null) _cooldownProcess.Interrupt();
+        }
+    }
+
+    public Spell WithSpellEvent(Action<Unit, Spell, Unit> spellEvent)
+    {
+        _spellEvent = spellEvent;
         return this;
     }
 
-    public Spell WithOnCastingCost(Action<Unit, Spell> onCastingCost)
-    {
-        OnCastingCost = onCastingCost;
-        return this;
-    }
-
-    public Spell WithOnTick(Action<Unit, Spell, List<Unit>> onTick)
-    {
-        OnTick = onTick;
-        return this;
-    }
-
-    public Spell WithCanCast(Func<Unit, Spell, bool> canCast)
-    {
-        CanCast = canCast;
-        return this;
-    }
-
-    public Spell HasHastedCooldown()
-    {
-        HasteEffectsCoolodwn = true;
-        return this;
-    }
-
-    public Spell HasCharges(int chargeCount)
-    {
-        Charges = chargeCount;
-        MaxCharges = chargeCount;
-        return this;
-    }
-
-    public Spell IsChanneled(double channelTime, double tickRate)
-    {
-        Channel = true;
-        HasteEffectsChannel = false;
-        ChannelTime = new Stat(channelTime);
-        TickRate = new Stat(tickRate);
-        return this;
-    }
-
-    public Spell WithHastedChannel()
-    {
-        HasteEffectsChannel = true;
-        return this;
-    }
-
-    public Spell DisableGCD()
-    {
-        HasGCD = false;
-        return this;
-    }
-
-    public Spell EnableCanCastWhileCasting()
+    public Spell WithCanCastWhileCasting()
     {
         CanCastWhileCasting = true;
         return this;
     }
 
-    public Spell WithCustomGCD(double gcd, bool isHasted)
+    public Spell WithCanCastWhileGCD()
     {
-        overridesGCD = true;
-        GCD = gcd;
-        HastedGCD = isHasted;
+        CanCastWhileGCD = true;
         return this;
     }
 
-    [Obsolete("Do not use this constructor. Convert to the new system.")]
-    public Spell(
-        string id, string name, double cooldown, double castTime, bool channel = false, double channelTime = 0,
-        double tickRate = 0, bool hasGCD = true, bool canCastWhileCasting = false,
-        bool hasAntiSpam = false, bool hasteEffectsCooldown = false, Func<Unit, Spell, bool>? canCast = null,
-        Action<Unit, Spell, List<Unit>>? onCast = null, Action<Unit, Spell, List<Unit>>? onTick = null)
+    public Spell WithoutGCD()
     {
-        // Used to flag 
-        ConsoleLogger.Log(
-            SimulationLogLevel.Error,
-            $"Deprecated: {name} is using old constructor still. Update to new constructor.",
-            emoji: "⚠️"
-        );
-
-        ID = id.Replace("-", "_");
-        Name = name;
-        Cooldown = new Stat(cooldown);
-        CastTime = new Stat(castTime);
-        Channel = channel;
-        ChannelTime = new Stat(channelTime);
-        TickRate = new Stat(tickRate);
-        HasGCD = hasGCD;
-        HasAntiSpam = hasAntiSpam;
-        HasteEffectsCoolodwn = hasteEffectsCooldown;
-        CanCastWhileCasting = canCastWhileCasting;
-        OnCast = onCast;
-        OnTick = onTick;
-        CanCast = canCast;
-        OffCooldown = 0;
+        TriggersGCD = false;
+        return this;
     }
 
-    /// <summary>
-    /// Call when updating cooldown from other sources. (EG: On hit, reduce cooldown of X spell by Y).
-    /// </summary>
-    /// <param name="deltaTime"></param>
-    public void UpdateCooldown(Unit caster, double deltaTime)
-    {
-        if (OffCooldown > 0)
-            OffCooldown = OffCooldown - deltaTime;
-        UpdateCooldownAndCharges(caster);
-    }
-
-    public void SetCurrentCharges(Unit caster, int charges)
+    public Spell WithCharges(int charges)
     {
         Charges = charges;
-        UpdateCooldownAndCharges(caster);
+        MaxCharges = charges;
+        return this;
     }
 
-    public bool CheckCanCast(Unit caster)
+    public Spell WithoutHastedCastTime()
     {
-        UpdateCooldownAndCharges(caster);
-        return Charges > 0 && (CanCast?.Invoke(caster, this) ?? true);
+        _hastedCastTime = false;
+        return this;
     }
 
-    public double GetTickRate(Unit caster)
+    public Spell WithHastedCooldown()
     {
-        return TickRate.GetValue();
+        _hastedCooldown = true;
+        return this;
     }
 
-    public double GetGCD(Unit caster)
+    public Spell WithTravelTime(double travelTime)
     {
-        if (!HasGCD)
-            if (HasAntiSpam) return 0.6; //Forced 0.6~ oGCD on all spells to stop people from spamming spells.
-            else return 0;
-
-        if (overridesGCD) return GCD;
-        return caster.GCD;
+        TravelTime = new Stat(travelTime);
+        return this;
     }
 
-    public bool GetIsGCDHasted(Unit caster)
+    public Spell WithCanCast(Func<Unit, Spell, bool> canCast)
     {
-        if (overridesGCD)
-        {
-            return HastedGCD;
-        }
-
-        return caster.HastedGCD;
+        _canCastFunc = canCast;
+        return this;
     }
 
-    public void CastingCost(Unit caster)
+    public Spell WithCastingCost(Action<Unit, Spell> costingCost)
     {
-        // Calls On Cast Finished.
-        OnCastingCost?.Invoke(caster, this);
-    }
-
-    public void CastFinished(Unit caster)
-    {
-        // Sets the Charges
-        Charges--;
-        // Sets the cooldown.
-        if (Charges < MaxCharges && caster.Simulator.Now >= OffCooldown)
-            SetOffCooldown(caster);
-    }
-
-    public void Cast(Unit caster, List<Unit> targets)
-    {
-        OnCast?.Invoke(caster, this, targets);
-    }
-
-    private void SetOffCooldown(Unit caster)
-    {
-        if (HasteEffectsCoolodwn)
-            OffCooldown =
-                caster.GetHastedValue(Cooldown.GetValue()) +
-                caster.Simulator.Now; // Reset cooldown after casting
-        else
-            OffCooldown =
-                Cooldown.GetValue() + caster.Simulator.Now; // Reset cooldown after casting
-    }
-
-    private void UpdateCooldownAndCharges(Unit caster)
-    {
-        if (Charges >= MaxCharges) return;
-        if (caster.Simulator.Now >= OffCooldown)
-        {
-            Charges++;
-            if (Charges < MaxCharges)
-            {
-                double cooldownDuration = HasteEffectsCoolodwn
-                    ? caster.GetHastedValue(Cooldown.GetValue())
-                    : Cooldown.GetValue();
-                OffCooldown = OffCooldown + cooldownDuration;
-            }
-        }
-    }
-
-    /// <summary>
-    /// No Cooldown Cast.
-    /// </summary>
-    /// <param name="caster"></param>
-    /// <param name="targets"></param>
-    public void FreeCast(Unit caster, List<Unit> targets)
-    {
-        OnCast?.Invoke(caster, this, targets);
-    }
-
-    public void Tick(Unit caster, List<Unit> targets)
-    {
-        OnTick?.Invoke(caster, this, targets);
+        _castingCostEvent = costingCost;
+        return this;
     }
 }

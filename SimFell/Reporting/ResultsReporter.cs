@@ -2,9 +2,8 @@ using System.Collections.Concurrent;
 using Spectre.Console;
 using SimFell.Engine.Base;
 using SimFell.Reporting.Builders;
-using System.Collections.Generic;
-using System.Linq;
-using SimFell.SimmyRewrite;
+using SimFell.Sim;
+using SimFell.Sim.SimFileParser;
 
 namespace SimFell.Reporting;
 
@@ -20,13 +19,22 @@ public class ResultsReporter
 
     public void StoreResults(Simulator simulator, SimFellConfig config)
     {
-        this.config = config;
-        totalIterations = config.RunCount;
+        config.Duration = 0;
+        if (simulator.GetDPS() != 0)
+        {
+            this.config = config;
+            totalIterations = config.RunCount;
+            foreach (var route in config.Route)
+            {
+                config.Duration += (int)route.duration;
+            }
+
+            iterationDpsValues.Add(simulator.GetDPS());
+
+            BuildSpellResults(simulator);
+        }
+
         totalDuration = config.Duration;
-
-        iterationDpsValues.Add(simulator.GetDPS());
-
-        BuildSpellResults(simulator);
     }
 
     private void BuildSpellResults(Simulator simulator)

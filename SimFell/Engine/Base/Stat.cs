@@ -1,371 +1,282 @@
-using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
-namespace SimFell;
-
-public class Stat
+namespace SimFell.Engine.Base
 {
-    //Base Value as points.
-    public double BaseValue;
-    private bool _hasDiminishingReturns;
-
-    private static readonly double PointEffectiveness = 0.017; //Base effectiveness per point. (0.17%).
-
-    // Percent Thresholdst for Break Points. Please make sure the first entry is 0.
-    private static readonly double[] _breakPoints = [0.0, 10.0, 15.0, 20.0, 25.0];
-
-    // Breakpoint Multipliers Please make sure there is an additional 1 entry for the 0->firstBreakpoint.
-    private static readonly double[] _breakPointMultipliers = [1, 1, 0.95, 0.9, 0.85, 0.8];
-
-    private static readonly double[] _breakPointRatingsPartial =
-    [
-        .. _breakPoints.Select((x, index) =>
-            (index > 0 ? x - _breakPoints[index - 1] : x) / _breakPointMultipliers[index] / PointEffectiveness)
-    ];
-
-    private static readonly double[] _breakPointRatings =
-        [.. _breakPointRatingsPartial.Select((x, index) => _breakPointRatingsPartial.Take(index + 1).Sum())];
-
-    // Caching fields
-    public Action<Stat> OnInvalidate { get; set; } = (Stat) => { };
-    private bool _cachedResultValid = false;
-    private double _cachedBaseValue = double.NaN;
-    private double _cachedResult = 0.0;
-    private bool _dynamicUseResultCache = false;
-
-    class CacheValues
+    public class Stat
     {
-        public double FlatSum { get; set; } = 0.0;
-        public double AdditivePercentSum { get; set; } = 0.0;
-        public double MultiplicativePercent { get; set; } = 1.0;
-        public double Multiplicative { get; set; } = 1.0;
-        public bool Valid { get; set; } = false;
-        public double InverseMultiplicativePercent { get; set; } = 1.0;
-    }
+        // Base Value
+        public double BaseValue { get; set; }
+        private readonly bool _hasDiminishingReturns;
 
-    // Pre-calculated modifier sums for performance.
-    private CacheValues _staticCache = new CacheValues();
+        // Diminishing returns constants
+        private static readonly double PointEffectiveness = 0.017; // 1.7% per point
+        private static readonly double[] _breakPoints = { 0.0, 10.0, 15.0, 20.0, 25.0 };
+        private static readonly double[] _breakPointMultipliers = { 1, 1, 0.95, 0.9, 0.85, 0.8 };
+        private static readonly double[] _breakPointRatings;
 
-    // Duplicate for dynamic for convenient data structure and re-use of code.
-    private CacheValues _dynamicCache = new CacheValues();
-
-    public Stat(double baseStat, bool hasDiminishingReturns = false)
-    {
-        BaseValue = baseStat;
-        _hasDiminishingReturns = hasDiminishingReturns;
-        InvalidateCache();
-    }
-
-    protected readonly List<Modifier> _modifiers = new();
-    protected readonly List<Modifier> _dynamicModifiers = new();
-
-
-    public void AddModifier(Modifier modifier)
-    {
-        if (modifier is DynamicModifier)
+        static Stat()
         {
-            _dynamicModifiers.Add(modifier);
-            InvalidateDynamicCache();
-        }
-        else
-        {
-            _modifiers.Add(modifier);
-            InvalidateStaticCache();
-        }
-
-        OnModifierAdded?.Invoke();
-    }
-
-    public void RemoveModifier(Modifier modifier)
-    {
-        if (modifier is DynamicModifier)
-        {
-            _dynamicModifiers.Remove(modifier);
-            InvalidateDynamicCache();
-        }
-        else
-        {
-            _modifiers.Remove(modifier);
-            InvalidateStaticCache();
-        }
-
-        OnModifierRemoved?.Invoke();
-    }
-
-    public void InvalidateDynamicCache(bool triggerEvents = true)
-    {
-        _dynamicCache.Valid = false;
-        _cachedResultValid = false;
-        if (triggerEvents)
-        {
-            OnInvalidate?.Invoke(this);
-        }
-    }
-
-    public void InvalidateStaticCache(bool triggerEvents = true)
-    {
-        _staticCache.Valid = false;
-        _cachedResultValid = false;
-        if (triggerEvents)
-        {
-            OnInvalidate?.Invoke(this);
-        }
-    }
-
-    public void InvalidateCache()
-    {
-        InvalidateStaticCache(false);
-        InvalidateDynamicCache(false);
-        OnInvalidate?.Invoke(this);
-    }
-
-    private void RecalculateModifierCache(ref CacheValues cache, List<Modifier> modifiers)
-    {
-        if (cache.Valid)
-            return;
-
-        cache.FlatSum = 0.0;
-        cache.AdditivePercentSum = 0.0;
-        cache.MultiplicativePercent = 1.0;
-        cache.Multiplicative = 1.0;
-
-        foreach (var modifier in modifiers)
-        {
-            switch (modifier.StatMod)
+            // Precompute break point ratings
+            var ratingsPartial = new double[_breakPoints.Length];
+            for (int i = 0; i < _breakPoints.Length; i++)
             {
-                case Modifier.StatModType.Flat:
-                    cache.FlatSum += modifier.Value;
-                    break;
-                case Modifier.StatModType.AdditivePercent:
-                    cache.AdditivePercentSum += modifier.Value;
-                    break;
-                case Modifier.StatModType.MultiplicativePercent:
-                    cache.MultiplicativePercent *= 1 + modifier.Value / 100.0d;
-                    break;
-                case Modifier.StatModType.Multiplicative:
-                    cache.Multiplicative *= modifier.Value;
-                    break;
-                case Modifier.StatModType.InverseMultiplicativePercent:
-                    cache.InverseMultiplicativePercent /= 1 + modifier.Value / 100.0;
-                    break;
+                ratingsPartial[i] = (i > 0 ? _breakPoints[i] - _breakPoints[i - 1] : _breakPoints[i])
+                                    / _breakPointMultipliers[i]
+                                    / PointEffectiveness;
+            }
+
+            _breakPointRatings = new double[_breakPoints.Length];
+            double sum = 0;
+            for (int i = 0; i < ratingsPartial.Length; i++)
+            {
+                sum += ratingsPartial[i];
+                _breakPointRatings[i] = sum;
             }
         }
 
-        cache.Valid = true;
-    }
+        // Modifier storage
+        private readonly HashSet<Modifier> _modifiers = new();
+        private readonly HashSet<Modifier> _dynamicModifiers = new();
 
-    private void RecalculateModifierCache(bool force = false)
-    {
-        if (_dynamicModifiers.Count > 0)
+        // Protected access for derived classes
+        protected IReadOnlyCollection<Modifier> DynamicModifiers => _dynamicModifiers;
+
+        // Caching
+        private CacheValues _staticCache = new CacheValues();
+        private CacheValues _dynamicCache = new CacheValues();
+        private bool _dynamicUseResultCache = false;
+        private double _cachedResult = 0;
+        private double _cachedBaseValue = double.NaN;
+        private bool _cachedResultValid = false;
+
+        // Diminishing returns cache
+        private readonly Dictionary<int, double> _percentageCache = new();
+
+        public event Action? OnModifierAdded;
+        public event Action? OnModifierRemoved;
+        public Action<Stat> OnInvalidate { get; set; } = _ => { };
+
+        public Stat(double baseValue, bool hasDiminishingReturns = false)
         {
-            if (force)
-                _dynamicCache.Valid = false;
+            BaseValue = baseValue;
+            _hasDiminishingReturns = hasDiminishingReturns;
+            InvalidateCache();
+        }
 
+        public void AddModifier(Modifier modifier)
+        {
+            var set = modifier is DynamicModifier ? _dynamicModifiers : _modifiers;
+            if (set.Add(modifier))
+            {
+                InvalidateCache();
+                if (modifier is DynamicModifier)
+                    InvalidateDynamicCache();
+                else
+                    InvalidateStaticCache();
+
+                OnModifierAdded?.Invoke();
+            }
+        }
+
+        public void RemoveModifier(Modifier modifier)
+        {
+            var set = modifier is DynamicModifier ? _dynamicModifiers : _modifiers;
+            if (set.Remove(modifier))
+            {
+                InvalidateCache();
+                if (modifier is DynamicModifier)
+                    InvalidateDynamicCache();
+                else
+                    InvalidateStaticCache();
+
+                OnModifierRemoved?.Invoke();
+            }
+        }
+
+        private void InvalidateDynamicCache() => _dynamicCache.Valid = false;
+        private void InvalidateStaticCache() => _staticCache.Valid = false;
+
+        public void InvalidateCache()
+        {
+            _cachedResultValid = false;
+            _percentageCache.Clear();
+            InvalidateDynamicCache();
+            InvalidateStaticCache();
+            OnInvalidate(this);
+        }
+
+        private void RecalculateModifierCache(ref CacheValues cache, IEnumerable<Modifier> modifiers)
+        {
+            if (cache.Valid) return;
+
+            cache.FlatSum = 0;
+            cache.AdditivePercentSum = 0;
+            cache.MultiplicativePercent = 1;
+            cache.Multiplicative = 1;
+            cache.InverseMultiplicativePercent = 1;
+
+            foreach (var mod in modifiers)
+            {
+                switch (mod.StatMod)
+                {
+                    case Modifier.StatModType.Flat: cache.FlatSum += mod.Value; break;
+                    case Modifier.StatModType.AdditivePercent: cache.AdditivePercentSum += mod.Value; break;
+                    case Modifier.StatModType.MultiplicativePercent:
+                        cache.MultiplicativePercent *= 1 + mod.Value / 100; break;
+                    case Modifier.StatModType.Multiplicative: cache.Multiplicative *= mod.Value; break;
+                    case Modifier.StatModType.InverseMultiplicativePercent:
+                        cache.InverseMultiplicativePercent /= 1 + mod.Value / 100; break;
+                }
+            }
+
+            cache.Valid = true;
+        }
+
+        private void RecalculateModifierCache()
+        {
+            RecalculateModifierCache(ref _staticCache, _modifiers);
             RecalculateModifierCache(ref _dynamicCache, _dynamicModifiers);
-
-            // We do not want to cache this unless specifically instructed to.
-            if (!_dynamicUseResultCache)
-                _dynamicCache.Valid = false;
         }
 
-        if (force)
-            _staticCache.Valid = false;
-
-        RecalculateModifierCache(ref _staticCache, _modifiers);
-    }
-
-    public event Action? OnModifierAdded;
-    public event Action? OnModifierRemoved;
-
-    /// <summary>
-    /// Allows Dynamic Modifiers to be cached in the ResultCache.
-    /// </summary>
-    public Stat SetDynamicUseResultCache()
-    {
-        _dynamicUseResultCache = true;
-        return this;
-    }
-
-    public double GetValue()
-    {
-        return GetValue(BaseValue);
-    }
-
-    public double GetValue(double inBaseValue)
-    {
-        // Check if we can use cached result
-        if (_cachedResultValid && _cachedBaseValue == inBaseValue &&
-            (_dynamicModifiers.Count == 0 || _dynamicUseResultCache))
+        public Stat SetDynamicUseResultCache()
         {
-            return _cachedResult;
+            _dynamicUseResultCache = true;
+            return this;
         }
 
-        // Recalculate Modifier Cache if needed. Function will check if it is needed.
-        RecalculateModifierCache();
-
-        // Calculate the value
-        double raw = inBaseValue + _staticCache.FlatSum + _dynamicCache.FlatSum;
-
-        // If it has Diminishing Returns, calculate the Diminishing Returns.
-        double value = _hasDiminishingReturns ? GetStatAsPercentage((int)raw) : raw;
-
-        // Add any Additive Percentages to the Value.
-        value += _staticCache.AdditivePercentSum + _dynamicCache.AdditivePercentSum;
-
-        // Any extra Multiplicative Percentages.
-        value *= _staticCache.MultiplicativePercent * _dynamicCache.MultiplicativePercent;
-
-        // Flat multipliers. Eg 2.0
-        value *= _staticCache.Multiplicative * _dynamicCache.Multiplicative;
-
-        // Apply inverse multiplicative percentages (for faster)
-        value *= _staticCache.InverseMultiplicativePercent * _dynamicCache.InverseMultiplicativePercent;
-
-        _cachedResult = value;
-        _cachedBaseValue = inBaseValue;
-        _cachedResultValid = true;
-
-        return value;
-    }
-
-    // Cache for diminishing returns calculation
-    private readonly Dictionary<int, double> _percentageCache = new();
-
-    public double GetStatAsPercentage(int statPoints)
-    {
-        if (_percentageCache.TryGetValue(statPoints, out double cachedPercentage))
+        public double GetValue(double? inBaseValue = null)
         {
-            return cachedPercentage;
+            double baseVal = inBaseValue ?? BaseValue;
+
+            if (_cachedResultValid && _cachedBaseValue == baseVal &&
+                (_dynamicModifiers.Count == 0 || _dynamicUseResultCache))
+                return _cachedResult;
+
+            RecalculateModifierCache();
+
+            double value = baseVal + _staticCache.FlatSum + _dynamicCache.FlatSum;
+            if (_hasDiminishingReturns)
+                value = GetStatAsPercentage((int)value);
+
+            value += _staticCache.AdditivePercentSum + _dynamicCache.AdditivePercentSum;
+            value *= _staticCache.MultiplicativePercent * _dynamicCache.MultiplicativePercent;
+            value *= _staticCache.Multiplicative * _dynamicCache.Multiplicative;
+            value *= _staticCache.InverseMultiplicativePercent * _dynamicCache.InverseMultiplicativePercent;
+
+            _cachedResult = value;
+            _cachedBaseValue = baseVal;
+            _cachedResultValid = true;
+
+            return value;
         }
 
-        for (int i = 1; i < _breakPointRatings.Length; i++)
+        private double GetStatAsPercentage(int statPoints)
         {
-            if (statPoints > _breakPointRatings[i])
-                continue;
+            if (_percentageCache.TryGetValue(statPoints, out var cached))
+                return cached;
 
-            if (statPoints == _breakPointRatings[i])
+            // Binary search for breakpoint interval
+            int left = 0, right = _breakPointRatings.Length - 1;
+            while (left < right)
             {
-                _percentageCache[statPoints] = _breakPoints[i];
-                return _percentageCache[statPoints];
+                int mid = (left + right) / 2;
+                if (statPoints > _breakPointRatings[mid])
+                    left = mid + 1;
+                else
+                    right = mid;
             }
 
-            // Lerp
-            _percentageCache[statPoints] = _breakPoints[i - 1] + (_breakPoints[i] - _breakPoints[i - 1]) *
-                (statPoints - _breakPointRatings[i - 1]) / _breakPointRatingsPartial[i];
+            int i = left;
+            double result;
+            if (i == 0)
+                result = statPoints * PointEffectiveness * _breakPointMultipliers[0];
+            else if (statPoints <= _breakPointRatings[i])
+            {
+                result = _breakPoints[i - 1] +
+                         (statPoints - _breakPointRatings[i - 1]) /
+                         ((_breakPointRatings[i] - _breakPointRatings[i - 1]) /
+                          (_breakPoints[i] - _breakPoints[i - 1]));
+            }
+            else
+            {
+                result = _breakPoints.Last() + (statPoints - _breakPointRatings.Last()) * PointEffectiveness *
+                    _breakPointMultipliers.Last();
+            }
 
-            return _percentageCache[statPoints];
+            _percentageCache[statPoints] = result;
+            return result;
         }
 
-        // Lerp with Infinity
-        _percentageCache[statPoints] = _breakPoints.Last() + (statPoints - _breakPointRatings.Last()) *
-            PointEffectiveness * _breakPointMultipliers.Last();
-        return _percentageCache[statPoints];
-    }
+        public bool HasModifier(Modifier mod) => _modifiers.Contains(mod);
+        public void ClearCache() => InvalidateCache();
 
-    public bool HasModifier(Modifier modifier) => _modifiers.Contains(modifier);
-
-    // Method to clear caches if needed (useful for memory management in long-running simulations)
-    public void ClearCache()
-    {
-        InvalidateCache();
-        _percentageCache.Clear();
-    }
-}
-
-public class HealthStat : Stat
-{
-    public double MaximumValue;
-
-    // Cache for max value calculation
-    private bool _maxValueCacheValid = false;
-    private double _cachedMaxValue = 0.0;
-
-    public HealthStat(double baseStat, bool hasDiminishingReturns = false) : base(baseStat, hasDiminishingReturns)
-    {
-        MaximumValue = baseStat;
-        OnModifierAdded += InvalidateMaxValueCache;
-        OnModifierRemoved += InvalidateMaxValueCache;
-    }
-
-    private void InvalidateMaxValueCache()
-    {
-        _maxValueCacheValid = false;
-    }
-
-    public double GetMaxValue()
-    {
-        if (_maxValueCacheValid)
+        private class CacheValues
         {
-            return _cachedMaxValue;
+            public double FlatSum;
+            public double AdditivePercentSum;
+            public double MultiplicativePercent = 1;
+            public double Multiplicative = 1;
+            public double InverseMultiplicativePercent = 1;
+            public bool Valid = false;
         }
+    }
 
-        // Check for dynamic modifiers
-        bool hasDynamicModifiers = _dynamicModifiers.Count > 0;
-
-        _cachedMaxValue = GetValue(MaximumValue);
-
-        // Only cache if no dynamic modifiers
-        if (!hasDynamicModifiers)
+    public class Modifier
+    {
+        public enum StatModType
         {
-            _maxValueCacheValid = true;
+            Flat,
+            AdditivePercent,
+            MultiplicativePercent,
+            Multiplicative,
+            InverseMultiplicativePercent
         }
 
-        return _cachedMaxValue;
-    }
-}
+        public StatModType StatMod { get; }
+        public virtual double Value { get; set; }
 
-public class Modifier
-{
-    public enum StatModType
-    {
-        /// <summary>
-        /// Modifies the value by a flat amount. (EG: Reduce -0.5s Cast Time)
-        /// </summary>
-        Flat,
-
-        /// <summary>
-        /// Modifies the value by a flat percentage. (EG: Additional +25% Crit Chance)
-        /// </summary>
-        AdditivePercent,
-
-        /// <summary>
-        /// Modifies the Value by a percentage. (EG: 20% More Damage.)
-        /// </summary>
-        MultiplicativePercent,
-
-        /// <summary>
-        /// Modifies the final Value via a given Multiplier. (EG: 2x Cast Time)
-        /// </summary>
-        Multiplicative,
-
-        /// <summary>
-        /// Special modifier that decreases the interval for “faster” effects.
-        /// Value is the percent increase speed. (e.g., 40 = 40% faster ticks)
-        /// </summary>
-        InverseMultiplicativePercent
+        public Modifier(StatModType statMod, double value)
+        {
+            StatMod = statMod;
+            Value = value;
+        }
     }
 
-    public StatModType StatMod { get; }
-    public virtual double Value { get; set; }
-
-    public Modifier(StatModType statMod, double value)
+    public class DynamicModifier : Modifier
     {
-        StatMod = statMod;
-        Value = value;
-    }
-}
+        private readonly Func<double> _callback;
+        public override double Value => _callback();
 
-public class DynamicModifier : Modifier
-{
-    private Func<double> ValueCallback { get; }
-
-    public override double Value
-    {
-        get => ValueCallback.Invoke();
+        public DynamicModifier(StatModType type, Func<double> callback) : base(type, 0)
+        {
+            _callback = callback;
+        }
     }
 
-    public DynamicModifier(StatModType statMod, Func<double> callback) : base(statMod, 0d)
+    public class HealthStat : Stat
     {
-        ValueCallback = callback;
+        public double MaximumValue { get; set; }
+        private bool _maxCacheValid = false;
+        private double _cachedMax = 0;
+
+        public HealthStat(double baseStat, bool diminishing = false) : base(baseStat, diminishing)
+        {
+            MaximumValue = baseStat;
+            OnModifierAdded += () => _maxCacheValid = false;
+            OnModifierRemoved += () => _maxCacheValid = false;
+        }
+
+        public double GetMaxValue()
+        {
+            if (_maxCacheValid) return _cachedMax;
+
+            bool hasDynamic = DynamicModifiers.Count > 0;
+            _cachedMax = GetValue(MaximumValue);
+
+            if (!hasDynamic) _maxCacheValid = true;
+            return _cachedMax;
+        }
     }
 }

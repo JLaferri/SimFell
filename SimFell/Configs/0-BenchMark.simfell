@@ -1,0 +1,31 @@
+# Sim Configuration
+name=Rime - Quickplay - Average
+duration=600
+
+enemies=160
+run_count=10000
+simulation_type=average
+simulation_mode=time
+
+# Character Configuration
+hero=Benchmark
+
+stat_mode=percent
+
+primary=1000
+crit=0
+expertise=0
+haste=0
+spirit=0
+
+#talents=2-12-3 # Stands for Talents 1.2, 2.1, 2.2, 3.3
+talents=0-0-0
+
+# Gear
+# gear_helmet=Test Helm Name,int=14,stam=17,exp=23,crit=4,gem_bonus=33,gem=ruby_t1,ilvl=150,tier=6
+# gear_shoulder=Test Shoulder Name,int=12,stam=15,crit=13,haste=6,set=Wyrmling Vigor,ilvl=150,tier=6
+
+# Actions
+#action=/benchmark
+#action=/benchmark_nodmg
+action=/benchmark_aoedot

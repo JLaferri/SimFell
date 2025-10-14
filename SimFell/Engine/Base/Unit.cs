@@ -1,121 +1,101 @@
+using SimFell.Engine.Base;
 using SimFell.Logging;
 using SimFell.Sim;
-using SimFell.SimmyRewrite;
+using SimSharp;
 
-namespace SimFell;
+namespace SimFell.Base;
 
-public class Unit : SimLoopListener
+public class Unit
 {
-    // Base Variables
-    public string Name { get; set; }
-    public HealthStat Health { get; set; }
-    private bool HasInfiniteHp { get; set; }
-    public Stat Stamina = new Stat(0);
-    public List<Aura> Buffs { get; set; } = [];
-    List<Aura> _expiredBuffs = new List<Aura>();
-    public List<Aura> Debuffs { get; set; } = [];
-    List<Aura> _expiredDebuffs = new List<Aura>();
-    public List<Spell> SpellBook { get; set; } = [];
-    public List<Talent> Talents { get; set; } = [];
-    public List<Spell> Rotation { get; set; } = [];
-    public Unit? PrimaryTarget { get; private set; }
-
-    public List<SimAction> SimActions { get; set; } = new List<SimAction>();
-
-    // Casting
-    public double GCD { get; set; }
-    public bool HastedGCD { get; set; }
-    private Spell? _currentSpell;
-    public List<Unit> Targets = new List<Unit>();
-
-    // Baseline Stats.
-    public Stat MainStat = new Stat(1000);
-    public Stat CritcalStrikeStat = new Stat(0, true);
-    public Stat ExpertiseStat = new Stat(0, true);
-    public Stat HasteStat = new Stat(0, true);
-    public Stat SpiritStat = new Stat(0, true);
-
-    //Critical Strike Power
-    public Stat CriticalStrikePowerStat = new Stat(0);
-
-    //Spirit Value
-    public double Spirit = 100; //TODO: Proper Spirit Regen?
-
-    static Modifier spiritOfHeroismMod = new Modifier(Modifier.StatModType.AdditivePercent, 30);
-
-    public Aura SpiritOfHeroism = new Aura(
-        id: "spirit-of-heroism",
-        name: "Spirit of Heroism",
-        duration: 20,
-        tickInterval: 0,
-        onApply: (unit, target) => { unit.HasteStat.AddModifier(spiritOfHeroismMod); },
-        onRemove: (unit, target) => { unit.HasteStat.RemoveModifier(spiritOfHeroismMod); }
-    );
-
-
-    // Other Stat Buffs
-    public Stat DamageBuffs = new Stat(0);
-    public Stat DamageTakenDebuffs = new Stat(0);
-
-    //Events 
-    public Action<Unit, Unit, double, Spell?>? OnDamageDealt { get; set; }
-    public Action<Unit, double, Spell?, bool>? OnDamageReceived { get; set; }
-    public Action<Unit, double, Spell?>? OnCrit { get; set; }
-    public Action<Unit, Spell, List<Unit>> OnCastStarted { get; set; } = (unit, spellSource, targets) => { };
-    public Action<Unit, Spell, List<Unit>> OnCastDone { get; set; } = (unit, spellSource, targets) => { };
-
-    public Action<Unit, Spell, List<Unit>> OnChannelStarted { get; set; } = (unit, spellSource, targets) => { };
-    public Action<Unit, Spell, List<Unit>> OnChannelEnd { get; set; } = (unit, spellSource, targets) => { };
-
-    // On Health Updated event
-    public event Action? OnHealthUpdated;
-
-    public Unit(string name, bool hasInfiniteHp = false)
+    public Unit(string name, bool hasInfiniteHP = false)
     {
         Name = name;
         Stamina = new Stat(999999);
         Health = new HealthStat(Stamina.GetValue());
-        HasInfiniteHp = hasInfiniteHp;
-        GCD = 1.5;
-        HastedGCD = true;
+        SpiritCharge = 100;
+        _hasInfiniteHP = hasInfiniteHP;
 
         //Add base 5% Crit.
         CritcalStrikeStat.AddModifier(new Modifier(Modifier.StatModType.AdditivePercent, 5));
 
-        // Subscribe to Stat Modifiers.
-        Stamina.OnModifierAdded += UpdateHealthFromStamina;
-        Stamina.OnModifierRemoved += UpdateHealthFromStamina;
+        //Baseline GCD
+        GlobalCooldown = TimeSpan.FromSeconds(1.5);
+        _isOnGCD = false;
     }
 
-    private void UpdateHealthFromStamina()
+    // Configuration
+    public string Name { get; }
+    public Simulator Simulator { get; set; }
+    public HealthStat Health { get; set; }
+    public double SpiritCharge { get; set; }
+    private readonly bool _hasInfiniteHP;
+    public Unit PrimaryTarget { get; set; }
+    public List<Unit> Targets { get; set; }
+
+    public List<SimAction> SimActions { get; set; } = new();
+    public List<Spell> SpellBook { get; set; } = new();
+    public List<Talent> Talents { get; set; } = new();
+
+    // GCD
+    public static TimeSpan GlobalCooldown;
+
+    // Base Stats
+    public Stat MainStat = new(1000);
+    public Stat Stamina = new(0);
+    public Stat CritcalStrikeStat = new(0, true);
+    public Stat ExpertiseStat = new(0, true);
+    public Stat HasteStat = new(0, true);
+    public Stat SpiritStat = new(0, true);
+
+    // Other Stats
+    public Stat CriticalStrikePowerStat = new Stat(0);
+
+    // Other Modifiers
+    public Stat DamageBuffs { get; set; } = new Stat(0);
+
+    // Casting
+    public bool IsCasting { get; private set; }
+
+    // Auras
+    public List<Aura> Buffs { get; set; } = [];
+    public List<Aura> Debuffs { get; set; } = [];
+
+    // Spirit of Heroism
+    static Modifier _spiritOfHeroismModifier = new Modifier(Modifier.StatModType.AdditivePercent, 30);
+
+    protected Aura SpiritOfHeroism = new Aura("spirit-of-heroism", "Spirit of Heroism", 20, 0)
+        .WithOnApply((_, target, _) => target.HasteStat.AddModifier(_spiritOfHeroismModifier))
+        .WithOnRemove((_, target, _) => target.HasteStat.RemoveModifier(_spiritOfHeroismModifier));
+
+    //Events
+    public Action<Unit, Spell, Unit>? OnCastDone { get; set; }
+    public Action<Unit, Unit, double, Spell, bool>? OnDamageDealt { get; set; }
+    public Action<Unit, double, Spell, bool>? OnDamageReceived { get; set; }
+    public Action<Unit, double, Spell>? OnCrit { get; set; }
+
+    // Privates
+    private bool _isOnGCD;
+
+    public IEnumerable<Event> DoAction()
     {
-        ConsoleLogger.Log(SimulationLogLevel.Debug, $"Updating health from stamina");
-
-        double oldMax = Health.GetMaxValue();
-        double newMax = Stamina.GetValue();
-
-        // Adjust current health proportionally
-        if (oldMax > 0)
+        if (PrimaryTarget != null)
         {
-            Health.BaseValue = Health.GetValue() / oldMax * newMax;
-            Health.MaximumValue = Health.GetMaxValue() / oldMax * newMax;
+            foreach (var action in SimActions)
+            {
+                // If not casting, and not on GCD
+                if (!IsCasting && !IsOnGCD())
+                {
+                    if (action.CanExecute(this))
+                    {
+                        action.Spell.Cast(this, PrimaryTarget);
+                        yield break;
+                    }
+                }
+            }
         }
-        else
-        {
-            Health.BaseValue = newMax;
-            Health.MaximumValue = newMax;
-        }
 
-        OnHealthUpdated?.Invoke();
-
-        ConsoleLogger.Log(SimulationLogLevel.Debug,
-            $"New health: {Health.GetValue()} | Max Health: {Health.GetMaxValue()}");
-    }
-
-    public Unit(string name, int health, int mainStat, int critcalStrikeStat, int expertiseStat, int hasteStat,
-        int spiritStat) : this(name)
-    {
-        SetPrimaryStats(mainStat, critcalStrikeStat, expertiseStat, hasteStat, spiritStat);
+        yield return Simulator.Env.Timeout(TimeSpan.FromSeconds(1));
+        if (!IsCasting && !IsOnGCD()) Simulator.Env.Process(DoAction(), 999);
     }
 
     public virtual void SetPrimaryStats(int mainStat, int criticalStrikeStat, int expertiseStat, int hasteStat,
@@ -138,127 +118,161 @@ public class Unit : SimLoopListener
         }
     }
 
-    /// <summary>
-    /// Applies a buff to the Unit and invokes OnApply.
-    /// </summary>
-    /// <param name="caster"></param>
-    /// /// <param name="target"></param>
-    /// <param name="buff"></param>
-    public void ApplyBuff(Unit caster, Unit target, Aura buff)
+    public void ActivateTalent(int row, int col)
     {
-        var existing = Buffs.Where(aura => aura.ID == buff.ID).ToList();
-        if (existing.Count >= buff.MaxStacks)
+        var talent = Talents.FirstOrDefault(talent => talent.GridPos == $"{row}.{col}");
+        if (talent != null)
         {
-            // Console.WriteLine("TODO: Refresh?");
+            talent.Activate(this);
+            ConsoleLogger.Log(SimulationLogLevel.Setup, $"Activated talent '{talent.Name}'");
         }
-        else
+    }
+
+    public void ApplyBuff(Unit caster, Aura aura)
+    {
+        void RemoveHandler(Unit removeCaster, Unit removeTarget, Aura removeAura)
         {
-            buff.Apply(caster, target);
-            Buffs.Add(buff);
+            removeAura.OnRemove -= RemoveHandler;
+            Buffs.Remove(removeAura);
+            ConsoleLogger.Log(
+                SimulationLogLevel.BuffEvents,
+                $"[bold blue]{Name}[/] loses buff: [bold yellow]{removeAura.Name}[/]"
+            );
         }
+
+        aura.OnRemove += RemoveHandler;
+        Buffs.Add(aura);
+        aura.Apply(caster, this);
 
         ConsoleLogger.Log(
             SimulationLogLevel.BuffEvents,
-            $"[bold blue]{Name}[/] gains buff: [bold yellow]{buff.Name}[/]",
-            "💪"
+            $"[bold blue]{Name}[/] gains buff: [bold yellow]{aura.Name}[/]"
         );
     }
 
-    public bool HasBuff(Aura buff)
+    public void RemoveBuff(Unit caster, Aura aura)
     {
-        var existing = Buffs.Where(aura => aura.ID == buff.ID).ToList();
-        return existing.Count > 0;
+        aura.Remove(caster, caster, 0);
     }
 
-    public void RemoveBuff(Aura buff)
+    public void ApplyDebuff(Unit caster, Aura aura)
     {
-        var existing = Buffs.Where(aura => aura.ID == buff.ID).ToList();
-        foreach (var aura in existing)
+        void RemoveHandler(Unit removeCaster, Unit removeTarget, Aura removeAura)
         {
+            removeAura.OnRemove -= RemoveHandler;
+            Debuffs.Remove(removeAura);
             ConsoleLogger.Log(
                 SimulationLogLevel.BuffEvents,
-                $"[bold blue]{Name}[/] loses buff: [bold yellow]{buff.Name}[/]",
-                "💪🛑"
+                $"[bold blue]{Name}[/] loses debuff: [bold yellow]{removeAura.Name}[/]"
             );
-            aura.Remove();
-            Buffs.Remove(aura);
         }
-    }
 
-    public void RemoveDebuff(Aura debuff)
-    {
-        var existing = Debuffs.Where(aura => aura.ID == debuff.ID).ToList();
-        foreach (var aura in existing)
-        {
-            ConsoleLogger.Log(
-                SimulationLogLevel.BuffEvents,
-                $"[bold blue]{Name}[/] loses Debuff: [bold yellow]{debuff.Name}[/]",
-                "💪🛑"
-            );
-            aura.Remove();
-            Debuffs.Remove(aura);
-        }
-    }
+        aura.OnRemove += RemoveHandler;
 
-    /// <summary>
-    /// Applies a debuff to the Unit and invokes OnApply.
-    /// </summary>
-    /// /// <param name="caster"></param>
-    /// <param name="target"></param>
-    /// <param name="debuff"></param>
-    public void ApplyDebuff(Unit caster, Unit target, Aura debuff)
-    {
-        var existing = Debuffs.Where(aura => aura.ID == debuff.ID).ToList();
-        if (existing.Count >= debuff.MaxStacks)
-            // existing.MinBy(aura => aura.RemainingTime)?.Refresh();
-            Console.WriteLine("TODO: Refresh");
-        else
-        {
-            debuff.Apply(caster, target);
-            Debuffs.Add(debuff);
-        }
+        Debuffs.Add(aura);
+        aura.Apply(caster, this);
 
         ConsoleLogger.Log(
-            SimulationLogLevel.DebuffEvents,
-            $"[bold blue]{Name}[/] gains debuff: [bold yellow]{debuff.Name}[/]",
-            "💔"
+            SimulationLogLevel.BuffEvents,
+            $"[bold blue]{Name}[/] gains debuff: [bold yellow]{aura.Name}[/]"
         );
     }
 
-    public bool HasDebuff(Aura buff)
+    public void StartCasting()
     {
-        var existing = Debuffs.Where(aura => aura.ID == buff.ID).ToList();
-        return existing.Count > 0;
+        IsCasting = true;
     }
 
-    public List<Aura> GetDebuffs(Aura buff)
+    public void FinishCasting()
     {
-        var existing = Debuffs.Where(aura => aura.ID == buff.ID).ToList();
-        return existing;
+        IsCasting = false;
+        if (!_isOnGCD) Simulator.Env.Process(DoAction(), 999);
     }
 
-    public Aura GetDebuff(Aura buff)
+    public bool IsOnGCD()
     {
-        var existing = Debuffs.Where(aura => aura.ID == buff.ID).ToList();
-        return existing.FirstOrDefault();
+        return _isOnGCD;
     }
 
-    /// <summary>
-    /// Calculates how much damage something will do, excluding the 
-    /// </summary>
-    /// <param name="target"></param>
-    /// <param name="damagePercent"></param>
-    /// <param name="spellSource"></param>
-    /// <param name="includeCriticalStrike"></param>
-    /// <param name="includeExpertise"></param>
-    /// <param name="isFlatDamage"></param>
-    /// <returns>Damage value as Float. Bool if Critical Strike happened.</returns>
+    public void TriggerGCD()
+    {
+        _isOnGCD = true;
+        Simulator.Env.Process(GCDProcess(GlobalCooldown.TotalSeconds));
+    }
+
+    private IEnumerable<Event> GCDProcess(double duration)
+    {
+        duration = GetHastedValue(duration);
+        yield return Simulator.Env.Timeout(TimeSpan.FromSeconds(duration));
+        _isOnGCD = false;
+        if (!IsCasting) Simulator.Env.Process(DoAction(), 999);
+    }
+
+    public double TakeDamage(double amount, bool isCritical, Spell? spellSource = null)
+    {
+        var totalDamage = (int)amount;
+
+        // Log damage event with coloring for critical hits
+        if (ConsoleLogger.Enabled)
+        {
+            var sourceName = spellSource != null
+                ? spellSource.Name
+                : "Unknown";
+            var message = $"[bold blue]{sourceName}[/]"
+                          + $" hits [bold yellow]{Name}[/]"
+                          + $" for [bold magenta]{totalDamage}[/] "
+                          + $"{(isCritical ? " (Critical Strike)" : "")}";
+            ConsoleLogger.Log(SimulationLogLevel.DamageEvents, message, isCritical ? "💥" : null);
+        }
+
+        OnDamageReceived?.Invoke(this, totalDamage, spellSource, isCritical);
+
+        if (!_hasInfiniteHP) Health.BaseValue -= totalDamage;
+        if (Health.GetValue() < 0) Health.BaseValue = 0;
+
+        return totalDamage;
+    }
+
+    public double DealDamage(Unit target, double damagePercent, double damageSpread, Spell spellSource,
+        bool includeCriticalStrike = true, bool includeExpertise = true, bool isFlatDamage = false)
+    {
+        // TODO: Handle Damage Spread. 
+        var (damage, isCritical) =
+            GetDamage(target, damagePercent, spellSource, includeCriticalStrike, includeExpertise, isFlatDamage);
+
+        var totalDamageTaken = target.TakeDamage(damage, isCritical, spellSource);
+        if (isCritical) OnCrit?.Invoke(this, totalDamageTaken, spellSource); //On Crit events called.
+        OnDamageDealt?.Invoke(this, target, totalDamageTaken, spellSource, isCritical); //Called when damage is dealt.
+
+        return damage;
+    }
+
+    public void DealAOEDamage(double damagePercent, double damageSpread, double softCap, double targetCap,
+        Spell spellSource,
+        bool includePrimaryTarget = true, bool includeCriticalStrike = true, bool includeExpertise = true,
+        bool isFlatDamage = false)
+    {
+        //Gets the list of targets, skips the first one if includePrimaryTarget is False.
+        var affectedTargets = includePrimaryTarget
+            ? Targets
+            : Targets.Where(t => t != PrimaryTarget).ToList();
+        int targetCount = affectedTargets.Count;
+
+        // Calculate damage per target
+        double damagePerTarget =
+            damagePercent * (targetCount > softCap ? Math.Sqrt(softCap / targetCount) : 1.0);
+
+        // Deal damage to each affected target
+        foreach (var target in affectedTargets.Take(targetCount))
+        {
+            DealDamage(target, damagePerTarget, damageSpread, spellSource, includeCriticalStrike, includeExpertise,
+                isFlatDamage);
+        }
+    }
+
     public (double damage, bool isCritical) GetDamage(Unit target, double damagePercent, Spell? spellSource = null,
         bool includeCriticalStrike = true, bool includeExpertise = true, bool isFlatDamage = false)
     {
-        // TODO: Remove this when I start to use values from the game (EG: Proper percentages)
-        if (!isFlatDamage) damagePercent = damagePercent / 1000.0;
-
         var critPercent = CritcalStrikeStat.GetValue();
         critPercent = includeCriticalStrike ? critPercent : 0;
 
@@ -291,322 +305,14 @@ public class Unit : SimLoopListener
         CriticalStrikePowerStat.RemoveModifier(grievousCritsModifier);
 
         //Any additional mods on the target.
-        damage = GetDamageTakenWithDebuffs(damage);
+        // TODO: This.
+        // damage = target.GetDamageTakenWithDebuffs(damage);
 
         return (damage, isCritical);
     }
 
-    /// <summary>
-    /// Deals damage to the primary/first target based on the passed in Damage Percent. Takes into consideration current MainStat,
-    /// Expertise, Critical Hit Chance, and Critical Hit Power.
-    /// </summary>
-    /// <param name="damagePercent">Damage percentage as full XX.X%</param>
-    /// <param name="damageSource">Source of the damage. Usually a spell but can also be an Aura.</param>
-    public void DealDamage(double damagePercent, Spell? spellSource = null)
+    public double GetHastedValue(double value)
     {
-        var target = Targets.FirstOrDefault()
-                     ?? throw new Exception("No valid targets");
-        DealDamage(target, damagePercent, spellSource);
-    }
-
-    /// <summary>
-    /// Deals damage to the target based on the passed in Damage Percent. Takes into consideration current MainStat,
-    /// Expertise, Critical Hit Chance, and Critical Hit Power.
-    /// </summary>
-    /// <param name="target">Target for the damage.</param>
-    /// <param name="damagePercent">Damage percentage as full XX.X%</param>
-    /// <param name="damageSource">Source of the damage. Usually a spell but can also be an Aura.</param>
-    /// <param name="includeCriticalStrike">If the damage can crit.</param>
-    /// <param name="includeExpertise">If the damage will include Expertise in its calculations.</param>
-    /// <param name="isFlatDamage">If the damage is flat, does not include damagePercent + MainStat </param>
-    public double DealDamage(Unit target, double damagePercent, Spell? spellSource = null,
-        bool includeCriticalStrike = true, bool includeExpertise = true, bool isFlatDamage = false)
-    {
-        var (damage, isCritical) =
-            GetDamage(target, damagePercent, spellSource, includeCriticalStrike, includeExpertise, isFlatDamage);
-
-        var totalDamageTaken = target.TakeDamage(damage, isCritical, spellSource);
-        if (isCritical) OnCrit?.Invoke(this, totalDamageTaken, spellSource); //On Crit events called.
-        OnDamageDealt?.Invoke(this, target, totalDamageTaken, spellSource); //Called when damage is dealt.
-
-        return damage;
-    }
-
-
-    /// <summary>
-    /// Deals damage to all targets. Takes into consideration current MainStat,
-    /// Expertise, Critical Hit Chance, and Critical Hit Power.
-    /// </summary>
-    /// <param name="damagePercent">Damage percentage as full XX.X%</param>
-    /// <param name="targetCap">Target cap before AOE Damage Scaling happens.</param>
-    /// <param name="includePrimaryTarget">Includes the Primary Target when dealing AOE. Disable when doing splash damage.</param>
-    /// <param name="damageSource">Source of the damage. Usually a spell but can also be an Aura.</param>
-    public void DealAOEDamage(double damagePercent, double targetCap, Spell? spellSource = null,
-        bool includePrimaryTarget = true)
-    {
-        //Gets the list of targets, skips the first one if includePrimaryTarget is False.
-        var affectedTargets = includePrimaryTarget ? Targets : Targets.Skip(1).ToList();
-        int targetCount = affectedTargets.Count;
-
-        // Calculate damage per target
-        double damagePerTarget =
-            damagePercent * (targetCount > targetCap ? Math.Sqrt(targetCap / targetCount) : 1.0);
-
-        // Deal damage to each affected target
-        foreach (var target in affectedTargets)
-        {
-            DealDamage(target, damagePerTarget, spellSource);
-        }
-    }
-
-    /// <summary>
-    /// Deals damage to a specific number of targets. Takes into consideration current MainStat,
-    /// Expertise, Critical Hit Chance, and Critical Hit Power.
-    /// </summary>
-    /// <param name="damagePercent">Damage percentage as full XX.X%</param>
-    /// <param name="targetCap">Target cap before AOE stops.</param>
-    /// <param name="includePrimaryTarget">Includes the Primary Target when dealing AOE. Disable when doing splash damage.</param>
-    /// <param name="damageSource">Source of the damage. Usually a spell but can also be an Aura.</param>
-    public void DealCappedAOEDamage(double damagePercent, double targetCap, Spell? spellSource = null,
-        bool includePrimaryTarget = true)
-    {
-        //Gets the list of targets, skips the first one if includePrimaryTarget is False.
-        var affectedTargets = includePrimaryTarget ? Targets : Targets.Skip(1).ToList();
-        int targetCount = affectedTargets.Count;
-
-        var enemies_stuck = 0;
-        // Deal damage to each affected target
-        foreach (var target in affectedTargets)
-        {
-            DealDamage(target, damagePercent, spellSource);
-            enemies_stuck++;
-            if (enemies_stuck >= targetCap)
-                break;
-        }
-    }
-
-    public double GetDamageTakenWithDebuffs(double amount)
-    {
-        return DamageTakenDebuffs.GetValue(amount);
-    }
-
-    /// <summary>
-    /// Called when a target takes damage. Takes into consideration any debuffs on the target, along with any extra
-    /// modifiers.
-    /// </summary>
-    /// <returns>Damage taken after modifiers.</returns>
-    /// <param name="amount">Incoming Damage amount.</param>
-    /// <param name="isCritical">If the damage was a critical hit.</param>
-    public double TakeDamage(double amount, bool isCritical, Spell? spellSource = null)
-    {
-        var totalDamage = (int)amount;
-
-        // Log damage event with coloring for critical hits
-        var sourceName = spellSource != null
-            ? spellSource.Name
-            : "Unknown";
-        var message = $"[bold blue]{sourceName}[/]"
-                      + $" hits [bold yellow]{Name}[/]"
-                      + $" for [bold magenta]{totalDamage}[/] "
-                      + $"{(isCritical ? " (Critical Strike)" : "")}";
-        ConsoleLogger.Log(SimulationLogLevel.DamageEvents, message, isCritical ? "💥" : null);
-
-        OnDamageReceived?.Invoke(this, totalDamage, spellSource, isCritical);
-
-        if (!HasInfiniteHp) Health.BaseValue -= totalDamage;
-        if (Health.GetValue() < 0) Health.BaseValue = 0;
-        OnHealthUpdated?.Invoke();
-
-        return totalDamage;
-    }
-
-    public double GetHastedValue(double baseRate)
-    {
-        if (baseRate == 0) return 0;
-        return baseRate / (1 + HasteStat.GetValue() / 100);
-    }
-
-    public void SetPrimaryTarget(Unit target)
-    {
-        PrimaryTarget = target;
-    }
-
-    public bool IsDead() => Health.GetValue() <= 0;
-
-    public void Died()
-    {
-        ConsoleLogger.Log(
-            SimulationLogLevel.DamageEvents,
-            $"[bold blue]{Name}[/] is dead.",
-            "💀"
-        );
-    }
-
-    private List<SimEvent> _castEvents = new List<SimEvent>();
-    private double _castStartTime;
-
-    public void StartCasting(Spell spell, List<Unit> targets)
-    {
-        _currentSpell = spell;
-
-        // Handle Non-Channeled Spells.
-        if (!spell.Channel)
-        {
-            ConsoleLogger.Log(
-                SimulationLogLevel.CastEvents,
-                $"Casting [bold blue]{spell.Name}[/]"
-            );
-
-            // Fire off the Cast Started Event.
-            OnCastStarted?.Invoke(this, spell, Targets);
-
-            // Schedule the actual cast finish event.
-            double castTime = spell.CastTime.GetValue();
-            SimEvent castFinishEvent = new SimEvent(Simulator, this, castTime, () => FinishCasting(spell));
-            _castStartTime = Simulator.Now;
-            _castEvents.Add(castFinishEvent);
-            Simulator.Schedule(castFinishEvent);
-        }
-
-        if (spell.Channel)
-        {
-            ConsoleLogger.Log(
-                SimulationLogLevel.CastEvents,
-                $"Channeling [bold blue]{spell.Name}[/]"
-            );
-
-            // Trigger Cast Started Event.
-            OnChannelStarted?.Invoke(this, spell, Targets);
-
-            // Channel Spells set their cooldown and casting cost at the start of the channel.
-            spell.CastingCost(this);
-            spell.CastFinished(this);
-
-            _castStartTime = Simulator.Now;
-
-            // Channeled Spells always have a single hit at the start of the channel.
-            TriggerSpellEvent(spell);
-            // Queue the channel ending.
-            Simulator.Schedule(new SimEvent(Simulator, this, spell.ChannelTime.GetValue(),
-                () => FinishChanneling(spell), spell.HasteEffectsChannel));
-
-            // Schedule the next tick event.
-            spell.OnTick += OnTickFromChanneledSpell;
-            SimEvent tickEvent = new SimEvent(Simulator, this, spell.GetTickRate(this),
-                () => TriggerSpellEvent(spell));
-            _castEvents.Add(tickEvent);
-            Simulator.Schedule(tickEvent);
-        }
-    }
-
-    // Used to handle on tick events for channeled spells.
-    private void OnTickFromChanneledSpell(Unit caster, Spell spell, List<Unit> targets)
-    {
-        _castEvents.Clear();
-        SimEvent tickEvent = new SimEvent(Simulator, this, spell.GetTickRate(this),
-            () => TriggerSpellEvent(spell));
-        _castEvents.Add(tickEvent);
-        Simulator.Schedule(tickEvent);
-    }
-
-    public void InteruptCasting()
-    {
-        Console.WriteLine("!! Not fully implemented yet. !! ");
-        foreach (var evt in _castEvents)
-        {
-            Simulator.UnSchedule(evt);
-        }
-
-        ConsoleLogger.Log(
-            SimulationLogLevel.CastEvents,
-            $"Cancel Casting [bold blue]{_currentSpell.Name}[/]"
-        );
-    }
-
-    private void FinishCasting(Spell spell)
-    {
-        _castEvents.Clear();
-        ConsoleLogger.Log(
-            SimulationLogLevel.CastEvents,
-            $"Finished Casting [bold blue]{spell.Name}[/]"
-        );
-
-        // Handle the Casting Cost + Cast Finished.
-        spell.CastingCost(this);
-        spell.CastFinished(this);
-        if (spell != null) OnCastDone?.Invoke(this, spell, Targets);
-
-        // Schedule the Spells actual effect taking into consideration travel time.
-        double travelTime = spell.TravelTime.GetValue();
-        Simulator.Schedule(new SimEvent(Simulator, this, travelTime,
-            () => TriggerSpellEvent(spell), false));
-
-        ScheduleNextCast();
-    }
-
-    private void FinishChanneling(Spell spell)
-    {
-        spell.OnTick -= OnTickFromChanneledSpell;
-
-        foreach (var evt in _castEvents)
-        {
-            if (evt.Time > Simulator.Now)
-            {
-                //Handles Partial Ticks for channeled spells.
-                double partialTickPercentage = (Simulator.Now - evt.StartTime) / (evt.Time - evt.StartTime);
-                Modifier partialTickMod = new Modifier(Modifier.StatModType.Multiplicative, partialTickPercentage);
-                spell.DamageModifiers.AddModifier(partialTickMod);
-                TriggerSpellEvent(spell);
-                spell.DamageModifiers.RemoveModifier(partialTickMod);
-                Simulator.UnSchedule(evt);
-            }
-        }
-
-        _castEvents.Clear();
-        ConsoleLogger.Log(
-            SimulationLogLevel.CastEvents,
-            $"Finished Channeling [bold blue]{spell.Name}[/]"
-        );
-
-        ScheduleNextCast();
-    }
-
-    private void ScheduleNextCast()
-    {
-        double gcd = _currentSpell.GetGCD(this);
-        double nextActionDelay = Math.Max(0,
-            gcd - (_currentSpell.Channel ? _currentSpell.ChannelTime.GetValue() : _currentSpell.CastTime.GetValue()));
-        if (nextActionDelay > 0)
-            ConsoleLogger.Log(
-                SimulationLogLevel.CastEvents,
-                $" -> Waiting on [bold blue]GCD[/]."
-            );
-        Simulator.Schedule(new SimEvent(Simulator, this, nextActionDelay,
-            () => Simulator.QueuePlayerAction(this), _currentSpell.GetIsGCDHasted(this)));
-    }
-
-    private void TriggerSpellEvent(Spell spell)
-    {
-        if (spell.Channel) spell.Tick(this, Targets);
-        else spell.Cast(this, Targets);
-    }
-
-    public void ActivateTalent(int row, int col)
-    {
-        var talent = Talents.FirstOrDefault(talent => talent.GridPos == $"{row}.{col}");
-        if (talent != null)
-        {
-            talent.Activate(this);
-            ConsoleLogger.Log(SimulationLogLevel.Setup, $"Activated talent '{talent.Name}'");
-        }
-    }
-
-    public void CleanUp()
-    {
-        OnDamageDealt = null;
-        OnDamageReceived = null;
-        OnCrit = null;
-        OnCastStarted = null;
-        OnCastDone = null;
+        return value / (1 + (HasteStat.GetValue() / 100));
     }
 }

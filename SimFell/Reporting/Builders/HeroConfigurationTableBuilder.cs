@@ -1,7 +1,7 @@
 using Spectre.Console;
-using System.Collections.Generic;
-using System.Linq;
-using SimFell.SimmyRewrite;
+using SimFell.Base;
+using SimFell.Sim;
+using SimFell.Sim.SimFileParser;
 
 namespace SimFell.Reporting.Builders;
 

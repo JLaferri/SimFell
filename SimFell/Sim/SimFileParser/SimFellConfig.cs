@@ -1,8 +1,9 @@
-using System.Diagnostics;
+using SimFell.Base;
 using SimFell.Engine.Heroes;
 using SimFell.Logging;
+using SimFell.SimmyRewrite;
 
-namespace SimFell.SimmyRewrite;
+namespace SimFell.Sim.SimFileParser;
 
 public class SimFellConfig
 {
@@ -34,6 +35,16 @@ public class SimFellConfig
     public int Duration { get; set; }
     public int RunCount { get; set; }
     public int Enemies { get; set; }
+
+    public List<DungeonRoute> Route { get; set; } = new();
+
+    // Example Dungeon Route.
+    public struct DungeonRoute
+    {
+        public int enemies;
+        public double duration;
+        public bool ultimate;
+    }
 
     public enum SimulationType
     {
@@ -92,10 +103,58 @@ public class SimFellConfig
             if (key == "spirit") config.Spirit = int.Parse(parts[1]);
             if (key == "talents") config.Talents = value;
             if (key.StartsWith("action")) config.Actions.Add(line); //Add the entire Line. APLParser handles it.
+            if (key.StartsWith("dungeon_route")) config.Route = ConfigureDungeonRoute(value);
         }
 
+        if (config.Route.Count > 0)
+        {
+            config.Duration = 0;
+            foreach (var route in config.Route)
+            {
+                if (route.enemies > 0) config.Duration += (int)route.duration;
+            }
+        }
+        else
+        {
+            DungeonRoute newRoute = new();
+            newRoute.enemies = config.Enemies;
+            newRoute.duration = config.Duration;
+            newRoute.ultimate = true;
+            config.Route.Add(newRoute);
+        }
 
         return config;
+    }
+
+    private static List<DungeonRoute> ConfigureDungeonRoute(string line)
+    {
+        List<DungeonRoute> route = new List<DungeonRoute>();
+        string[] parts = line.Split(':');
+        foreach (var part in parts)
+        {
+            string[] pull = part.Split(',');
+            int enemyCount = 0;
+            double duration = 0;
+            bool ultimate = false;
+            if (pull.Length >= 1)
+            {
+                enemyCount = int.Parse(pull[0]);
+            }
+
+            if (pull.Length >= 2)
+            {
+                duration = double.Parse(pull[1]);
+            }
+
+            if (pull.Length >= 3)
+            {
+                ultimate = true;
+            }
+
+            route.Add(new DungeonRoute() { duration = duration, ultimate = ultimate, enemies = enemyCount });
+        }
+
+        return route;
     }
 
     private static Unit LoadHero(string heroName)
@@ -104,8 +163,11 @@ public class SimFellConfig
 
         // Add Heroes here so they are able to be picked up in the config.
         if (hero == "rime") return new Rime();
-        if (hero == "tariq") return new Tariq();
-        if (hero == "ardeos") return new Ardeos();
+        // if (hero == "tariq") return new Tariq();
+        // if (hero == "ardeos") return new Ardeos();
+
+        //Benchmark
+        if (hero == "benchmark") return new Benchmark();
 
         // Returns if no other Hero is properly configured.
         ConsoleLogger.Log(SimulationLogLevel.Error, "Invalid Hero in SimFellConfig: " + heroName);

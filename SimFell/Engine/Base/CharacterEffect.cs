@@ -1,4 +1,6 @@
-namespace SimFell;
+using SimFell.Base;
+
+namespace SimFell.Engine.Base;
 
 public class CharacterEffect<T> where T : CharacterEffect<T>
 {

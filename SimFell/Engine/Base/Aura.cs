@@ -1,305 +1,160 @@
 using System.Diagnostics;
-using SimFell.Sim;
+using SimFell.Base;
+using SimSharp;
+using Process = SimSharp.Process;
 
-namespace SimFell;
+namespace SimFell.Engine.Base;
 
 public class Aura
 {
-    public string ID { get; set; }
-    public string Name { get; set; }
-    public double Duration { get; set; }
-    public Stat TickInterval { get; set; }
-    public int MaxStacks { get; set; }
-    public int CurrentStacks { get; set; }
-
-    // Runtime Data
-    private Unit _caster;
-    private Unit _target;
-    private bool _expired;
-    private bool _hasPartialTicks;
-
-    // Events
-    public Action<Unit, Unit, Aura>? OnTick;
-    public Action<Unit, Unit>? OnApply;
-    public Action<Unit, Unit>? OnRemove;
-    public Action<Unit, Unit>? OnIncreaseStack;
-
-    // Damage Values
-    private Spell _spellSource;
-    private double _damageMin;
-    private double _damageMax;
-    private bool _includeCriticalStrike;
-    private bool _includeExpertise;
-    private bool _isFlatDamage;
-    private bool _hastedTickRate;
-
-    public bool IsExpired => _expired;
-
-    private SimEvent _removeEvent;
-    private SimEvent _tickEvent;
-
-    public Aura(string id, string name, double duration, double tickInterval,
-        int maxStacks = 1,
-        Action<Unit, Unit, Aura>? onTick = null,
-        Action<Unit, Unit>? onApply = null,
-        Action<Unit, Unit>? onRemove = null)
+    public Aura(string id, string name, double duration, double tickInterval, int maxStatcks = 1)
     {
         ID = id.Replace("-", "_");
         Name = name;
         Duration = duration;
+        MaxStacks = maxStatcks;
+        CurrentStacks = maxStatcks;
         TickInterval = new Stat(tickInterval);
-        CurrentStacks = 1;
-        MaxStacks = maxStacks;
-        _hasPartialTicks = false;
         _hastedTickRate = true;
-        OnTick = onTick;
+    }
+
+    // Configuration.
+    public string ID { get; set; }
+    public string Name { get; set; }
+    public double Duration { get; set; }
+    public DateTime AuraExpires { get; set; }
+    public Stat TickInterval { get; set; }
+    public int MaxStacks { get; set; }
+    public int CurrentStacks { get; set; }
+
+    // Events
+    public Action<Unit, Unit, Aura>? OnTick;
+    public Action<Unit, Unit, Aura, double>? OnPartialTick;
+    public Action<Unit, Unit, Aura>? OnApply;
+    public Action<Unit, Unit, Aura>? OnRemove;
+    public Action<Unit, Unit, Aura>? OnIncreaseStack;
+    public Action<Unit, Unit, Aura>? OnDecreaseStack;
+
+    // Tick Rate Helpers
+    private bool _hastedTickRate;
+    private Process _tickProcess;
+    private Process _removeProcess;
+    private DateTime _lastTick;
+    private DateTime _scheduledTick;
+
+    public Aura WithOnApply(Action<Unit, Unit, Aura> onApply)
+    {
         OnApply = onApply;
+        return this;
+    }
+
+    public Aura WithOnRemove(Action<Unit, Unit, Aura> onRemove)
+    {
         OnRemove = onRemove;
-
-        _expired = false;
-    }
-
-    public Unit GetTarget()
-    {
-        return _target;
-    }
-
-    public double GetTickInterval()
-    {
-        if (_hastedTickRate) return _caster.GetHastedValue(TickInterval.GetValue());
-        else return TickInterval.GetValue();
-    }
-
-    public void Apply(Unit caster, Unit target)
-    {
-        _expired = false;
-        _caster = caster;
-        _target = target;
-        //_lastTick = _caster.Simulator.Now;
-        OnApply?.Invoke(caster, target);
-
-        _removeEvent = new SimEvent(caster.Simulator, caster, Duration, () =>
-        {
-            target.RemoveBuff(this);
-            target.RemoveDebuff(this);
-        }, false);
-        caster.Simulator.Schedule(_removeEvent);
-
-        if (TickInterval.GetValue() > 0)
-        {
-            _tickEvent = new SimEvent(caster.Simulator, caster, TickInterval.GetValue(), () => DoTick(),
-                _hastedTickRate);
-            caster.Simulator.Schedule(_tickEvent);
-        }
-    }
-
-    public void Remove()
-    {
-        _expired = true;
-        if (TickInterval.GetValue() > 0)
-        {
-            if (_hasPartialTicks)
-            {
-                double partialTickPercentage =
-                    (_caster.Simulator.Now - _tickEvent.StartTime) / (_tickEvent.Time - _tickEvent.StartTime);
-
-                if (partialTickPercentage < 1 && partialTickPercentage > 0)
-                {
-                    double oldMinDamage = _damageMin;
-                    double oldMaxDamage = _damageMax;
-                    _damageMin *= partialTickPercentage;
-                    _damageMax *= partialTickPercentage;
-                    DoTick(false);
-                    _damageMin = oldMinDamage;
-                    _damageMax = oldMaxDamage;
-                }
-            }
-
-            _caster.Simulator.UnSchedule(_tickEvent);
-        }
-
-        OnRemove?.Invoke(_caster, _target);
-    }
-
-    public void IncreaseStack()
-    {
-        CurrentStacks++;
-        CurrentStacks = Math.Min(CurrentStacks, MaxStacks);
-        OnIncreaseStack?.Invoke(_caster, _target);
-    }
-
-    public void DecreaseStack()
-    {
-        CurrentStacks--;
-        CurrentStacks = Math.Max(CurrentStacks, 0);
-        if (CurrentStacks == 0) Remove();
-    }
-
-    public double GetRemainingDuration()
-    {
-        return Math.Min(_removeEvent.Time - _caster.Simulator.Now, 0);
-    }
-
-    public Aura WithoutPartialTicks()
-    {
-        _hasPartialTicks = false;
         return this;
     }
 
-    public Aura WithPartialTicks()
+    public Aura WithOnTick(Action<Unit, Unit, Aura> onTick)
     {
-        _hasPartialTicks = true;
+        OnTick = onTick;
         return this;
     }
 
-    public Aura WithoutHastedTicks()
+    public Aura WithOnPartialTick(Action<Unit, Unit, Aura, double> onPartialTick)
+    {
+        OnPartialTick = onPartialTick;
+        return this;
+    }
+
+    public Aura WithOnIncreaseStack(Action<Unit, Unit, Aura> onIncreaseStack)
+    {
+        OnIncreaseStack = onIncreaseStack;
+        return this;
+    }
+
+    public Aura WithOnDecreaseStack(Action<Unit, Unit, Aura> onDecreaseStack)
+    {
+        OnDecreaseStack = onDecreaseStack;
+        return this;
+    }
+
+    public Aura WithoutHastedTickRate()
     {
         _hastedTickRate = false;
         return this;
     }
 
-    public Aura WithOnApply(Action<Unit, Unit>? onApply)
+    public void Apply(Unit caster, Unit target)
     {
-        OnApply += onApply;
-        return this;
+        OnApply?.Invoke(caster, target, this);
+        AuraExpires = caster.Simulator.Now + TimeSpan.FromSeconds(Duration);
+        if (TickInterval.GetValue() > 0)
+            _tickProcess = caster.Simulator.Env.Process(TickProcess(caster.Simulator.Env, caster, target));
+        _removeProcess = caster.Simulator.Env.Process(RemoveProcess(caster.Simulator.Env, caster, target));
     }
 
-    public Aura WithOnRemove(Action<Unit, Unit>? onRemove)
+    private IEnumerable<Event> TickProcess(Simulation env, Unit caster, Unit target)
     {
-        OnRemove += onRemove;
-        return this;
-    }
-
-    public Aura WithOnTick(Action<Unit, Unit, Aura>? onTick)
-    {
-        OnTick += onTick;
-        return this;
-    }
-
-    public void ClearOnTick()
-    {
-        OnTick = null;
-    }
-
-    public Aura WithDamageOnTick(Spell spellSource, double minDamage, double maxDamage, bool scaleDamageOnTicks = false,
-        bool includeCriticalStrike = true, bool includeExpertise = true, bool isFlatDamage = false)
-    {
-        _hasPartialTicks = true;
-        _spellSource = spellSource;
-        _damageMin = scaleDamageOnTicks ? minDamage / (Duration / TickInterval.GetValue()) : minDamage;
-        _damageMax = scaleDamageOnTicks ? maxDamage / (Duration / TickInterval.GetValue()) : maxDamage;
-        _includeCriticalStrike = includeCriticalStrike;
-        _includeExpertise = includeExpertise;
-        _isFlatDamage = isFlatDamage;
-
-        OnTick += (caster, target, aura) =>
+        void OnHasteChanged() => _tickProcess?.Interrupt();
+        if (_hastedTickRate)
         {
-            int dmg = SimRandom.Next((int)_damageMin, (int)_damageMax);
-            caster.DealDamage(target, dmg, _spellSource, _includeCriticalStrike, _includeExpertise, _isFlatDamage);
-        };
+            caster.HasteStat.OnModifierAdded += OnHasteChanged;
+            caster.HasteStat.OnModifierRemoved += OnHasteChanged;
+        }
 
-        return this;
-    }
+        _lastTick = env.Now;
+        _scheduledTick = _lastTick;
 
-    public Aura WithAOEDamageOnTick(Spell spellSource, double minDamage, double maxDamage, int targetCap,
-        bool scaleDamageOnTicks = false,
-        bool includeCriticalStrike = true, bool includeExpertise = true, bool isFlatDamage = false)
-    {
-        _hasPartialTicks = true;
-        _spellSource = spellSource;
-        _damageMin = scaleDamageOnTicks ? minDamage / (Duration / TickInterval.GetValue()) : minDamage;
-        _damageMax = scaleDamageOnTicks ? maxDamage / (Duration / TickInterval.GetValue()) : maxDamage;
-        _includeCriticalStrike = includeCriticalStrike;
-        _includeExpertise = includeExpertise;
-        _isFlatDamage = isFlatDamage;
-
-        OnTick += (caster, target, aura) =>
+        while (_removeProcess.IsAlive)
         {
-            int dmg = SimRandom.Next((int)_damageMin, (int)_damageMax);
-            caster.DealAOEDamage(dmg, targetCap, spellSource);
-        };
+            double tickDuration = TickInterval.GetValue();
+            tickDuration = _hastedTickRate ? caster.GetHastedValue(tickDuration) : tickDuration;
+            _scheduledTick = _lastTick + TimeSpan.FromSeconds(tickDuration);
 
-        return this;
-    }
+            yield return env.Timeout(_scheduledTick - env.Now);
 
-    public Aura WithIncreaseStacks(Action<Unit, Unit>? onIncreaseStack)
-    {
-        OnIncreaseStack += onIncreaseStack;
-        return this;
-    }
+            // If a "Fault" happened - Aka, anything that effects the Tick Rate.
+            if (_tickProcess.HandleFault())
+            {
+                continue;
+            }
 
-    public void ResetDuration(bool resetLastTick = false)
-    {
-        _removeEvent.ResetTime();
-        if (resetLastTick) _tickEvent.ResetTime();
-    }
+            _lastTick = env.Now;
+            OnTick?.Invoke(caster, target, this);
+        }
 
-    public void UpdateDuration(double delta)
-    {
-        _removeEvent.UpdateTime(delta);
-    }
-
-    private void DoTick(bool scheduleNextTick = true)
-    {
-        OnTick?.Invoke(_caster, _target, this);
-
-        if (scheduleNextTick)
+        if (_hastedTickRate)
         {
-            _tickEvent = new SimEvent(_caster.Simulator, _caster, TickInterval.GetValue(), () => DoTick(),
-                _hastedTickRate);
-            _caster.Simulator.Schedule(_tickEvent);
+            caster.HasteStat.OnModifierAdded -= OnHasteChanged;
+            caster.HasteStat.OnModifierRemoved -= OnHasteChanged;
         }
     }
 
-    public void DoBonusInstantTicks(double durationInSeconds)
+    private IEnumerable<Event> RemoveProcess(Simulation env, Unit caster, Unit target)
     {
-        if (_expired || GetTickInterval() <= 0 || OnTick == null) return;
+        double timeLeft = (AuraExpires - env.Now).TotalSeconds;
+        yield return env.Timeout(TimeSpan.FromSeconds(timeLeft), 1);
+        _tickProcess?.Interrupt();
 
-        // Calculate how many ticks would occur in the given duration
-        double hastedInterval = GetTickInterval();
-        int bonusTicks = (int)Math.Floor(durationInSeconds / hastedInterval);
-
-        // Apply the effect for that many ticks
-        for (int i = 0; i < bonusTicks; i++)
+        // Handle Partial Tick.
+        double partialTickFraction = 0;
+        if (TickInterval.GetValue() > 0)
         {
-            DoTick(false);
+            double expectedElapse = (_scheduledTick - _lastTick).TotalSeconds;
+            double actualElapse = (env.Now - _lastTick).TotalSeconds;
+            partialTickFraction = actualElapse / expectedElapse;
         }
+
+        Remove(caster, target, partialTickFraction);
     }
 
-    public double GetSimulatedDamage(double durationInSeconds)
+    public void Remove(Unit caster, Unit target, double partialTickFraction)
     {
-        return GetSimulatedDamage(durationInSeconds, _includeCriticalStrike, _includeExpertise, _isFlatDamage);
-    }
-
-    public double GetSimulatedDamage(double durationInSeconds, bool includeCriticalStrike,
-        bool includeExpertise, bool isFlatDamage)
-    {
-        if (_expired || GetTickInterval() <= 0 || OnTick == null) return 0;
-
-        // Calculate how many ticks would occur in the given duration
-        double hastedInterval = GetTickInterval();
-        double bonusTicks = durationInSeconds / hastedInterval;
-        int bonusFullTicks = (int)Math.Floor(bonusTicks);
-        double partialTick = bonusTicks - bonusFullTicks;
-        double totalDamage = 0;
-
-        // Apply the effect for that many ticks
-        int dmg;
-        for (int i = 0; i < bonusFullTicks; i++)
+        if (partialTickFraction > 0.01)
         {
-            dmg = SimRandom.Next((int)_damageMin, (int)_damageMax);
-            totalDamage += _caster.GetDamage(_target, dmg, _spellSource, includeCriticalStrike, includeExpertise,
-                isFlatDamage).damage;
+            OnPartialTick?.Invoke(caster, target, this, partialTickFraction);
         }
 
-        if (_hasPartialTicks)
-        {
-            dmg = SimRandom.Next((int)_damageMin, (int)_damageMax);
-            totalDamage += partialTick * _caster.GetDamage(_target, dmg, _spellSource, includeCriticalStrike,
-                includeExpertise,
-                isFlatDamage).damage;
-        }
-
-        return totalDamage;
+        OnRemove?.Invoke(caster, target, this);
     }
 }

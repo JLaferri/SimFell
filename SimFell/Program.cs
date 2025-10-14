@@ -1,10 +1,12 @@
-using System.Collections.Concurrent;
-using System.Diagnostics;
-using SimFell.Engine.Base;
+﻿using System.Diagnostics;
+using SimFell.Base;
 using SimFell.Reporting;
 using SimFell.Logging;
-using SimFell.SimmyRewrite;
+using SimFell.Sim;
+using SimFell.Sim.SimFileParser;
+using SimSharp;
 using Spectre.Console;
+using Environment = System.Environment;
 
 namespace SimFell;
 
@@ -24,6 +26,7 @@ public class Program
 
     private void RunSim()
     {
+        int processedEvents = 0;
         if (config.SimType == SimFellConfig.SimulationType.Debug)
         {
             ConsoleLogger.SetLevel(SimulationLogLevel.All);
@@ -33,6 +36,7 @@ public class Program
         else
         {
             ConsoleLogger.SetLevel(SimulationLogLevel.Minimal);
+            ConsoleLogger.Enabled = false;
         }
 
         var results = new ResultsReporter();
@@ -44,6 +48,7 @@ public class Program
         };
 
         int completed = 0;
+        int eventsScheduled = 0;
 
         // Progress bar setup
         AnsiConsole.Progress()
@@ -63,28 +68,27 @@ public class Program
 
                 Parallel.For(0, config.RunCount, parallelOptions, i =>
                 {
-                    var player = config.GetHero();
-                    var enemies = new List<Unit>();
-                    for (int e = 0; e < config.Enemies; e++)
-                        enemies.Add(new Unit("Goblin: #" + e, true));
-
-                    var simulator = new Simulator(player, enemies, config.Duration);
-                    if (config.SimType == SimFellConfig.SimulationType.Debug)
-                        ConsoleLogger.Simulator = simulator;
-
-                    simulator.Run();
-                    results.StoreResults(simulator, config);
-
                     // Thread-safe progress update
                     Interlocked.Increment(ref completed);
                     task.Value = completed;
+                    var hero = config.GetHero();
+                    var targets = new List<Unit>();
+                    for (int e = 0; e < config.Enemies; e++)
+                        targets.Add(new Unit("Goblin: #" + e, true));
+
+                    var simulator = new Simulator(hero, targets);
+                    if (config.SimType == SimFellConfig.SimulationType.Debug)
+                        ConsoleLogger.Simulator = simulator;
+                    simulator.Run(config.Route);
+                    eventsScheduled += simulator.Env.ProcessedEvents;
+                    results.StoreResults(simulator, config);
                 });
             });
 
         stopwatch.Stop();
-
         Console.WriteLine($"Duration: {stopwatch.Elapsed:hh\\:mm\\:ss\\.fff}");
         Console.WriteLine($"Iterations: {config.RunCount:N0}");
+        Console.WriteLine($"Processed Events: {eventsScheduled:N0}");
         results.Display();
         results = null;
 

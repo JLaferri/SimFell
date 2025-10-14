@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
+using SimFell.Sim;
+using SimSharp;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -51,10 +53,10 @@ public static class ConsoleLogger
         if (!_enabledLevels.HasFlag(level)) return;
 
         var formatted = emoji is null ? message : $"{emoji} {message}";
-        var time = Simulator == null ? 0 : Simulator.Now;
+        var time = Simulator == null ? 0 : (Simulator.Now - Simulator.Env.StartDate).TotalSeconds;
 
         var cleanMessage = Regex.Replace(Markup.Escape(formatted), @"\[.*?\]", "").Replace("]", "");
-        FileLogger.SimulationEvent(level, $"{time:F2}s : {cleanMessage}");
+        //FileLogger.SimulationEvent(level, $"{time:F2}s : {cleanMessage}");
 
         if (level == SimulationLogLevel.Setup)
             AnsiConsole.MarkupLine(formatted);
@@ -67,7 +69,7 @@ public static class ConsoleLogger
         if (!Enabled) return;
         if (!_enabledLevels.HasFlag(level)) return;
 
-        var time = Simulator == null ? 0 : Simulator.Now;
+        var time = Simulator == null ? 0 : (Simulator.Now - Simulator.Env.StartDate).TotalSeconds;
         if (level != SimulationLogLevel.Setup)
         {
             AnsiConsole.MarkupLine($"Time [aqua]{time:F2}[/]:");
@@ -75,6 +77,6 @@ public static class ConsoleLogger
 
         AnsiConsole.Write(renderable);
 
-        FileLogger.SimulationEvent(level, $"{time:F2}s : {renderable} (Reference console output)");
+        //FileLogger.SimulationEvent(level, $"{time:F2}s : {renderable} (Reference console output)");
     }
 }
