@@ -64,9 +64,10 @@ public class Simulator
             endTime = Env.Now + TimeSpan.FromSeconds(dungeonRoute.duration);
             Env.Run(endTime);
             currentDuration += dungeonRoute.duration;
-            while (Env.ActiveProcess != null)
+            if (_caster.CastProcess != null && _caster.CastProcess.IsAlive)
             {
-                Env.ActiveProcess.Interrupt();
+                _caster.CastProcess.Interrupt();
+                _caster.FinishCasting();
             }
         }
     }

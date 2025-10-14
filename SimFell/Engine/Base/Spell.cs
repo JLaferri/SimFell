@@ -61,7 +61,6 @@ public class Spell
 
     public virtual void Cast(Unit caster, Unit target)
     {
-        caster.StartCasting();
         // Trigger GCD
         if (TriggersGCD) caster.TriggerGCD();
         ConsoleLogger.Log(
@@ -75,6 +74,7 @@ public class Spell
         }
 
         _castProcess = caster.Simulator.Env.Process(CastProcess(caster, target));
+        caster.StartCasting(_castProcess);
     }
 
     protected virtual IEnumerable<Event> CastProcess(Unit caster, Unit target)

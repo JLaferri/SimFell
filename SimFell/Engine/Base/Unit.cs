@@ -73,6 +73,8 @@ public class Unit
     public Action<Unit, double, Spell, bool>? OnDamageReceived { get; set; }
     public Action<Unit, double, Spell>? OnCrit { get; set; }
 
+    public Process CastProcess { get; set; }
+
     // Privates
     private bool _isOnGCD;
 
@@ -178,8 +180,9 @@ public class Unit
         );
     }
 
-    public void StartCasting()
+    public void StartCasting(Process castProcess)
     {
+        CastProcess = castProcess;
         IsCasting = true;
     }
 
