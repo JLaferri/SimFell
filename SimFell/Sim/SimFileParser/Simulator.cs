@@ -47,7 +47,7 @@ public class Simulator
             _targets.Add(target);
         }
 
-        _caster.Targets = _targets;
+        _caster.Targets = new List<Unit>(_targets);
         _caster.SpiritCharge = route.ultimate ? 100 : 0;
         if (_targets.Count > 0)
             _caster.PrimaryTarget = _targets[0];

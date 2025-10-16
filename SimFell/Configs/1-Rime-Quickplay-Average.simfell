@@ -2,7 +2,7 @@
 name=Rime - Quickplay - Average
 duration=280
 enemies=8
-run_count=50000
+run_count=1
 simulation_type=average
 simulation_mode=time
 dungeon_route_name=Wyrmheart 37

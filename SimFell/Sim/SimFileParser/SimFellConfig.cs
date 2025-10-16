@@ -104,7 +104,8 @@ public class SimFellConfig
             if (key == "spirit") config.Spirit = int.Parse(parts[1]);
             if (key == "talents") config.Talents = value;
             if (key.StartsWith("action")) config.Actions.Add(line); //Add the entire Line. APLParser handles it.
-            if (key.StartsWith("dungeon_route")) config.Route = ConfigureDungeonRoute(value);
+            if (key == ("dungeon_route")) config.Route = ConfigureDungeonRoute(value);
+            if (key == ("dungeon_route_name")) config.RouteName = value;
         }
 
         if (config.Route.Count > 0)

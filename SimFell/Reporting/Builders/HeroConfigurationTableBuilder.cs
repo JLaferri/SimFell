@@ -27,10 +27,10 @@ public class HeroConfigurationTableBuilder(SimFellConfig config)
             $"[steelblue1]Simulation Mode[/]",
             $"[aquamarine3]{config.SimMode.ToString()}[/]"
         );
-
+        string enemies = config.Route.Count > 1 ? config.RouteName : config.Enemies.ToString();
         configTable.AddRow(
             $"[steelblue1]Enemies[/]",
-            $"[aquamarine3]{config.Enemies}[/]"
+            $"[aquamarine3]{enemies}[/]"
         );
 
         configTable.AddRow(
