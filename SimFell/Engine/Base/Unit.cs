@@ -1,4 +1,5 @@
 using SimFell.Engine.Base;
+using SimFell.Engine.Base.Interfaces;
 using SimFell.Logging;
 using SimFell.Sim;
 using SimSharp;
@@ -69,9 +70,9 @@ public class Unit
 
     //Events
     public Action<Unit, Spell, Unit>? OnCastDone { get; set; }
-    public Action<Unit, Unit, double, Spell, bool>? OnDamageDealt { get; set; }
-    public Action<Unit, double, Spell, bool>? OnDamageReceived { get; set; }
-    public Action<Unit, double, Spell>? OnCrit { get; set; }
+    public Action<Unit, Unit, double, IDamageSource, bool>? OnDamageDealt { get; set; }
+    public Action<Unit, double, IDamageSource, bool>? OnDamageReceived { get; set; }
+    public Action<Unit, double, IDamageSource>? OnCrit { get; set; }
 
     public Process CastProcess { get; set; }
 
@@ -180,6 +181,17 @@ public class Unit
         );
     }
 
+    public Aura GetDebuff(Aura aura)
+    {
+        return GetDebuff(aura.ID);
+    }
+
+    public Aura GetDebuff(string id)
+    {
+        id = id.Replace("-", "_");
+        return Debuffs.FirstOrDefault(x => x.ID == id);
+    }
+
     public void StartCasting(Process castProcess)
     {
         CastProcess = castProcess;
@@ -211,7 +223,7 @@ public class Unit
         if (!IsCasting) Simulator.Env.Process(DoAction(), 999);
     }
 
-    public double TakeDamage(double amount, bool isCritical, Spell? spellSource = null)
+    public double TakeDamage(double amount, bool isCritical, IDamageSource? spellSource = null)
     {
         var totalDamage = (int)amount;
 
@@ -236,7 +248,7 @@ public class Unit
         return totalDamage;
     }
 
-    public double DealDamage(Unit target, double damagePercent, double damageSpread, Spell spellSource,
+    public double DealDamage(Unit target, double damagePercent, double damageSpread, IDamageSource spellSource,
         bool includeCriticalStrike = true, bool includeExpertise = true, bool isFlatDamage = false)
     {
         // TODO: Handle Damage Spread. 
@@ -251,7 +263,7 @@ public class Unit
     }
 
     public void DealAOEDamage(double damagePercent, double damageSpread, double softCap, double targetCap,
-        Spell spellSource,
+        IDamageSource spellSource,
         bool includePrimaryTarget = true, bool includeCriticalStrike = true, bool includeExpertise = true,
         bool isFlatDamage = false)
     {
@@ -273,16 +285,17 @@ public class Unit
         }
     }
 
-    public (double damage, bool isCritical) GetDamage(Unit target, double damagePercent, Spell? spellSource = null,
+    public (double damage, bool isCritical) GetDamage(Unit target, double damagePercent,
+        IDamageSource? spellSource = null,
         bool includeCriticalStrike = true, bool includeExpertise = true, bool isFlatDamage = false)
     {
         var critPercent = CritcalStrikeStat.GetValue();
         critPercent = includeCriticalStrike ? critPercent : 0;
 
-        if (spellSource != null)
+        if (spellSource != null && spellSource.GetType() == typeof(Spell))
         {
-            damagePercent = spellSource.DamageModifiers.GetValue(damagePercent);
-            critPercent = spellSource.CritModifiers.GetValue(critPercent);
+            damagePercent = ((Spell)spellSource).DamageModifiers.GetValue(damagePercent);
+            critPercent = ((Spell)spellSource).CritModifiers.GetValue(critPercent);
         }
 
         Modifier grievousCritsModifier = new Modifier(Modifier.StatModType.AdditivePercent, 0);

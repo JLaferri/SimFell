@@ -64,6 +64,11 @@ public class ChanneledSpell : Spell
 
             yield return caster.Simulator.Env.Timeout(waitTime);
 
+            if (_castProcess.HandleFault())
+            {
+                break;
+            }
+
             if (scheduledTick <= channelEnd)
             {
                 OnTick?.Invoke(caster, this, target);

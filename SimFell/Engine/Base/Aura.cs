@@ -1,11 +1,12 @@
 using System.Diagnostics;
 using SimFell.Base;
+using SimFell.Engine.Base.Interfaces;
 using SimSharp;
 using Process = SimSharp.Process;
 
 namespace SimFell.Engine.Base;
 
-public class Aura
+public class Aura : IDamageSource
 {
     public Aura(string id, string name, double duration, double tickInterval, int maxStatcks = 1)
     {
@@ -13,9 +14,10 @@ public class Aura
         Name = name;
         Duration = duration;
         MaxStacks = maxStatcks;
-        CurrentStacks = maxStatcks;
+        CurrentStacks = 0;
         TickInterval = new Stat(tickInterval);
         _hastedTickRate = true;
+        _resetDurationOnStackIncrease = true;
     }
 
     // Configuration.
@@ -35,12 +37,18 @@ public class Aura
     public Action<Unit, Unit, Aura>? OnIncreaseStack;
     public Action<Unit, Unit, Aura>? OnDecreaseStack;
 
-    // Tick Rate Helpers
+    // Privates
+    private Unit _caster;
+    private Unit _target;
     private bool _hastedTickRate;
     private Process _tickProcess;
     private Process _removeProcess;
     private DateTime _lastTick;
     private DateTime _scheduledTick;
+    private bool _resetDurationOnStackIncrease;
+
+    private bool _resetDuration = false;
+    private bool _isRemoved = false;
 
     public Aura WithOnApply(Action<Unit, Unit, Aura> onApply)
     {
@@ -84,13 +92,33 @@ public class Aura
         return this;
     }
 
+    public Aura WithoutResetDurationOnIncreaseStack()
+    {
+        _resetDurationOnStackIncrease = false;
+        return this;
+    }
+
     public void Apply(Unit caster, Unit target)
     {
+        _caster = caster;
+        _target = target;
+        _isRemoved = false;
         OnApply?.Invoke(caster, target, this);
         AuraExpires = caster.Simulator.Now + TimeSpan.FromSeconds(Duration);
         if (TickInterval.GetValue() > 0)
             _tickProcess = caster.Simulator.Env.Process(TickProcess(caster.Simulator.Env, caster, target));
         _removeProcess = caster.Simulator.Env.Process(RemoveProcess(caster.Simulator.Env, caster, target));
+    }
+
+    public void IncreaseStack()
+    {
+        CurrentStacks++;
+        CurrentStacks = Math.Min(CurrentStacks, MaxStacks);
+        if (_resetDurationOnStackIncrease)
+        {
+            AuraExpires = _caster.Simulator.Now + TimeSpan.FromSeconds(Duration);
+            _removeProcess?.Interrupt();
+        }
     }
 
     private IEnumerable<Event> TickProcess(Simulation env, Unit caster, Unit target)
@@ -105,13 +133,13 @@ public class Aura
         _lastTick = env.Now;
         _scheduledTick = _lastTick;
 
-        while (_removeProcess.IsAlive)
+        while (!_isRemoved)
         {
             double tickDuration = TickInterval.GetValue();
             tickDuration = _hastedTickRate ? caster.GetHastedValue(tickDuration) : tickDuration;
             _scheduledTick = _lastTick + TimeSpan.FromSeconds(tickDuration);
-
-            yield return env.Timeout(_scheduledTick - env.Now);
+            if ((_scheduledTick - env.Now).TotalSeconds > 0)
+                yield return env.Timeout(_scheduledTick - env.Now);
 
             // If a "Fault" happened - Aka, anything that effects the Tick Rate.
             if (_tickProcess.HandleFault())
@@ -132,8 +160,18 @@ public class Aura
 
     private IEnumerable<Event> RemoveProcess(Simulation env, Unit caster, Unit target)
     {
-        double timeLeft = (AuraExpires - env.Now).TotalSeconds;
-        yield return env.Timeout(TimeSpan.FromSeconds(timeLeft), 1);
+        while (!_isRemoved)
+        {
+            double timeLeft = (AuraExpires - env.Now).TotalSeconds;
+            yield return env.Timeout(TimeSpan.FromSeconds(timeLeft), 1);
+            if (_removeProcess.HandleFault())
+            {
+                continue;
+            }
+
+            _isRemoved = true;
+        }
+
         _tickProcess?.Interrupt();
 
         // Handle Partial Tick.
@@ -150,6 +188,7 @@ public class Aura
 
     public void Remove(Unit caster, Unit target, double partialTickFraction)
     {
+        _isRemoved = true;
         if (partialTickFraction > 0.01)
         {
             OnPartialTick?.Invoke(caster, target, this, partialTickFraction);

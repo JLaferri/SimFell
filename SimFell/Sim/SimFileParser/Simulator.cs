@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using SimFell.Base;
 using SimFell.Engine.Base;
+using SimFell.Engine.Base.Interfaces;
 using SimFell.Sim.SimFileParser;
 using SimSharp;
 
@@ -73,7 +74,7 @@ public class Simulator
     }
 
     // Event Handlers for Reporting.
-    private void OnDamageReceived(Unit unit, double damageReceived, Spell? spellSource, bool isCritical)
+    private void OnDamageReceived(Unit unit, double damageReceived, IDamageSource? spellSource, bool isCritical)
     {
         string spellName = spellSource?.Name ?? "Unknown";
         _spellStats.AddOrUpdate(

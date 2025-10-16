@@ -1,10 +1,11 @@
 # Sim Configuration
 name=Rime - Quickplay - Average
-duration=120
-enemies=1
+duration=280
+enemies=8
 run_count=50000
 simulation_type=average
 simulation_mode=time
+dungeon_route_name=Wyrmheart 37
 dungeon_route=12,52:0,10:6,42:0,15:13,85:0,60:8,47:0,25:8,43,U:0,5:3,54:0,30:1,156,U
 
 # Character Configuration
@@ -13,14 +14,18 @@ hero=Rime
 stat_mode=percent
 
 primary=2150
-crit=16
-expertise=20
-haste=15
-spirit=25
+#crit=16
+#expertise=20
+#haste=15
+#spirit=25
+
+crit=20
+expertise=16
+haste=25
+spirit=15
 
 #talents=2-12-3 # Stands for Talents 1.2, 2.1, 2.2, 3.3
-talents=3-0-2
-
+talents=0-0-2
 # Gear
 # gear_helmet=Test Helm Name,int=14,stam=17,exp=23,crit=4,gem_bonus=33,gem=ruby_t1,ilvl=150,tier=6
 # gear_shoulder=Test Shoulder Name,int=12,stam=15,crit=13,haste=6,set=Wyrmling Vigor,ilvl=150,tier=6

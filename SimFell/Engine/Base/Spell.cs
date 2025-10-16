@@ -1,10 +1,11 @@
 using SimFell.Base;
+using SimFell.Engine.Base.Interfaces;
 using SimFell.Logging;
 using SimSharp;
 
 namespace SimFell.Engine.Base;
 
-public class Spell
+public class Spell : IDamageSource
 {
     public Spell(string id, string name, double cooldown, double castTime)
     {
@@ -22,8 +23,8 @@ public class Spell
     }
 
     // Configuration
-    public string ID { get; }
-    public string Name { get; }
+    public string ID { get; set; }
+    public string Name { get; set; }
     public Stat CastTime { get; } // in seconds
     public Stat Cooldown { get; } // in seconds
     public Stat TravelTime { get; set; } // in seconds
@@ -50,8 +51,8 @@ public class Spell
     private Action<Unit, Spell> _castingCostEvent;
     private Func<Unit, Spell, bool> _canCastFunc;
 
-    private Process _castProcess;
-    private Process _cooldownProcess;
+    protected Process _castProcess;
+    protected Process _cooldownProcess;
     private DateTime _cooldownProcessStartTime;
 
     public bool IsReady(Unit caster)
@@ -135,7 +136,12 @@ public class Spell
     private IEnumerable<Event> CooldownProcess(Unit caster)
     {
         _cooldownProcessStarted = true;
-        void OnHasteChanged() => _cooldownProcess?.Interrupt();
+
+        void OnHasteChanged()
+        {
+            if (_cooldownProcess != null && _cooldownProcess.IsAlive) _cooldownProcess.Interrupt();
+        }
+
         if (_hastedCooldown)
         {
             caster.HasteStat.OnModifierAdded += OnHasteChanged;

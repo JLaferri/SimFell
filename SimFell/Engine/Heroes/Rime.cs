@@ -1,5 +1,6 @@
 using SimFell.Base;
 using SimFell.Engine.Base;
+using SimFell.Engine.Base.Interfaces;
 using SimFell.Logging;
 using SimFell.Sim;
 
@@ -85,9 +86,10 @@ public class Rime : Unit
             })
             .WithOnPartialTick((_, _, _, partialTickFraction) =>
             {
-                DealAOEDamage(0.55 * partialTickFraction, 0.1, 5, 19, _burstingIce);
+                DealAOEDamage(0.55 * partialTickFraction, 0.1, 5, 19, _burstingIceAura);
                 UpdateAnima(1);
             });
+
         _burstingIce = new Spell("bursting-ice", "Bursting Ice", 10, 2)
             .WithSpellEvent((caster, spell, _) => { PrimaryTarget.ApplyDebuff(caster, _burstingIceAura); });
 
@@ -107,7 +109,7 @@ public class Rime : Unit
                 UpdateAnima(1);
             });
 
-        Action<Unit, Unit, double, Spell, bool> flightOfTheNavirDamageEvent = (_, _, _, spellSource, _) =>
+        Action<Unit, Unit, double, IDamageSource, bool> flightOfTheNavirDamageEvent = (_, _, _, spellSource, _) =>
         {
             int swallowTriggers = spellSource == _coldSnap ? 5
                 : spellSource == _freezingTorrent ? 1
@@ -330,6 +332,37 @@ public class Rime : Unit
                 };
             });
 
+        var _coalescingFrost = new Talent("coalescing-frost", "Coalescing Frost", "3.3")
+            .WithOnActivate(unit =>
+            {
+                OnDamageDealt += (_, target, _, spell, crit) =>
+                {
+                    if (spell == _freezingTorrent)
+                    {
+                        var aura = target.GetDebuff("coalescing-frost");
+                        if (aura != null)
+                        {
+                            aura.IncreaseStack();
+                            if (crit && SimRandom.Roll(50)) aura.IncreaseStack();
+                        }
+                        else
+                        {
+                            target.ApplyDebuff(this, new Aura("coalescing-frost", "Coalescing Frost", 3, 0, 30)
+                                .WithOnRemove((_, _, auraInstance) =>
+                                {
+                                    double damage = auraInstance.CurrentStacks * 0.43;
+                                    DealAOEDamage(damage, 0.1, 5, 19, auraInstance);
+                                })
+                            );
+                        }
+                        // DealAOEDamage(0.43, 0.1, 5, 19, new Aura("coalescing-frost", "Coalescing Frost", 3, 0, 30));
+                        // if (crit && SimRandom.Roll(50))
+                        //     DealAOEDamage(0.43, 0.1, 5, 19, new Aura("coalescing-frost", "Coalescing Frost", 3, 0, 30));
+                    }
+                };
+            });
+
         Talents.Add(_avalanche);
+        Talents.Add(_coalescingFrost);
     }
 }

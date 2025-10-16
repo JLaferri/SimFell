@@ -36,6 +36,7 @@ public class SimFellConfig
     public int RunCount { get; set; }
     public int Enemies { get; set; }
 
+    public string RouteName { get; set; }
     public List<DungeonRoute> Route { get; set; } = new();
 
     // Example Dungeon Route.
