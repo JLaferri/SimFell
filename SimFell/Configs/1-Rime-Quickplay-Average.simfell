@@ -1,47 +1,53 @@
 # Sim Configuration
 name=Rime - Quickplay - Average
 duration=280
-enemies=8
-run_count=1
+enemies=5
+run_count=50000
 simulation_type=average
 simulation_mode=time
 dungeon_route_name=Wyrmheart 37
-dungeon_route=12,52:0,10:6,42:0,15:13,85:0,60:8,47:0,25:8,43,U:0,5:3,54:0,30:1,156,U
+#dungeon_route=12,52:0,10:6,42:0,15:13,85:0,60:8,47:0,25:8,43,U:0,5:3,54:0,30:1,156,U
 
 # Character Configuration
 hero=Rime
 
 stat_mode=percent
 
-primary=2150
-#crit=16
-#expertise=20
-#haste=15
-#spirit=25
+primary=2215
+crit=25
+expertise=15
+haste=21
+spirit=14
 
-crit=20
-expertise=16
-haste=25
-spirit=15
+# Winters Embrace, Supreme Torrent, Coalescing Frost (5 Points)
+#talents=1B,2B,3C
+# Winters Embrace, Burst Bolter, Avalanche (5 Points)
+#talents=1B,2A,3B
+# Winters Embrace, Burst Bolter, Supreme Torrent, Avalanche (6 Points)
+#talents=1B,2A,2B,3A
+# Personal Build Idea: Winter's Embrace, Burst Bolter, Supreme Torrent, Coalescing Frost, GGB, Cascading Blitz, Soulfrost Torrent (33k)
+#talents=1B,2A,2B,3C,4B,5A,5C
+# Old Meta: Winter's Embrace, Burst Bolter, Avalanche, GGB, Cascading Blitz, Wrath of Winter (33k)
+#talents=1B,2A,3B,4B,5A,5B
+# talents=5A
 
-#talents=2-12-3 # Stands for Talents 1.2, 2.1, 2.2, 3.3
-talents=0-0-2
 # Gear
 # gear_helmet=Test Helm Name,int=14,stam=17,exp=23,crit=4,gem_bonus=33,gem=ruby_t1,ilvl=150,tier=6
 # gear_shoulder=Test Shoulder Name,int=12,stam=15,crit=13,haste=6,set=Wyrmling Vigor,ilvl=150,tier=6
 
 # Actions
 action=/wrath_of_winter
-action+=/ice_blitz
+action+=/ice_blitz,if=buff.ice_blitz.down
 action+=/flight_of_the_navir
-action+=/bursting_ice
-action+=/ice_comet,if=talent.winters_embrace and targets>=3 and buff.winters_embrace.up
-action+=/ice_comet,if=!talent.winters_embrace and targets>=3 and character.winter_orbs == 5
+action+=/bursting_ice,if=talent.winters_embrace.disabled or targets<=2
+action+=/ice_comet,if=talent.winters_embrace.enabled and targets>=3 and buff.winters_embrace.up
+action+=/ice_comet,if=talent.winters_embrace.disabled and targets>=3 and character.winter_orbs == 5
 action+=/glacial_blast,if=targets<=2 and character.winter_orbs==5
 action+=/glacial_blast,if=buff.wrath_of_winter.up
 action+=/glacial_blast,if=buff.glacial_assault.up
-action+=/cold_snap,if=character.anima<5 and character.winter_orbs<4
 action+=/freezing_torrent
+action+=/bursting_ice,if=talent.winters_embrace.enabled and targets>=3
+action+=/cold_snap,if=character.anima<5 and character.winter_orbs<4
 action+=/glacial_blast,if=targets<=2
-action+=/ice_comet,if=!talent.winters_embrace and targets>=3
+action+=/ice_comet,if=talent.winters_embrace.disabled and targets>=3
 action+=/frost_bolt

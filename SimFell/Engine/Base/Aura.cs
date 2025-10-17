@@ -121,6 +121,12 @@ public class Aura : IDamageSource
         }
     }
 
+    public void UpdateAuraExpires(double delta)
+    {
+        AuraExpires += TimeSpan.FromSeconds(delta);
+        _removeProcess?.Interrupt();
+    }
+
     private IEnumerable<Event> TickProcess(Simulation env, Unit caster, Unit target)
     {
         void OnHasteChanged() => _tickProcess?.Interrupt();

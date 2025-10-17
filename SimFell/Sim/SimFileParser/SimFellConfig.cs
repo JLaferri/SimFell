@@ -50,6 +50,7 @@ public class SimFellConfig
     public enum SimulationType
     {
         Average,
+        StatWeights,
         Debug
     }
 
@@ -181,23 +182,12 @@ public class SimFellConfig
         if (string.IsNullOrWhiteSpace(Talents))
             return;
 
-        var rows = Talents.Split('-');
+        var talents = Talents.Split(',');
 
         // Row index starts at 1
-        for (int rowIndex = 0; rowIndex < rows.Length; rowIndex++)
+        foreach (var talent in talents)
         {
-            string row = rows[rowIndex];
-            if (string.IsNullOrEmpty(row) || row == "0")
-                continue;
-
-            foreach (char colChar in row)
-            {
-                if (char.IsDigit(colChar) && colChar != '0')
-                {
-                    int col = colChar - '0';
-                    unit.ActivateTalent(rowIndex + 1, col);
-                }
-            }
+            unit.ActivateTalent(talent);
         }
     }
 

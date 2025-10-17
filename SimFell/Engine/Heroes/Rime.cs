@@ -1,8 +1,10 @@
+using System.Threading.Channels;
 using SimFell.Base;
 using SimFell.Engine.Base;
 using SimFell.Engine.Base.Interfaces;
 using SimFell.Logging;
 using SimFell.Sim;
+using SimFell.Sim.SimFileParser;
 
 namespace SimFell.Engine.Heroes;
 
@@ -22,6 +24,7 @@ public class Rime : Unit
     private Spell _frostSwallows; // Frost Swallow Procs.
     private Spell _glacialBlast;
     private Spell _iceBlitz;
+    private Aura _iceBlitzAura;
     private Spell _iceComet;
     private Spell _wintersBlessing;
     private Spell _wrathOfWinter;
@@ -67,7 +70,10 @@ public class Rime : Unit
             }
         }
 
-        // TODO: Spirit Refund.
+        if (SimRandom.Roll(SpiritStat.GetValue()))
+        {
+            WinterOrbs -= winterOrbsDelta;
+        }
 
         if (WinterOrbs > MaxWinterOrbs)
             ConsoleLogger.Log(SimulationLogLevel.DamageEvents, "[bold red]Over Capped Winter Orbs[/]");
@@ -78,7 +84,7 @@ public class Rime : Unit
     {
         //TODO: Figure out what the target cap, soft caps, and damage spreads actually are.
 
-        _burstingIceAura = new Aura("bursting-ice", "Bursting Ice", 5, 0.5, 1)
+        _burstingIceAura = new Aura("bursting-ice", "Bursting Ice", 3, 0.5, 1)
             .WithOnTick((_, _, _) =>
             {
                 DealAOEDamage(0.55, 0.1, 5, 19, _burstingIce);
@@ -144,8 +150,13 @@ public class Rime : Unit
 
         _glacialBlast = new Spell("glacial-blast", "Glacial Blast", 0, 2)
             .WithCanCast((_, spell) => WinterOrbs >= spell.ResourceCostModifiers.GetValue(2))
-            .WithCastingCost((_, spell) => UpdateWinterOrbs((int)spell.ResourceCostModifiers.GetValue(2)))
+            .WithCastingCost((_, spell) => UpdateWinterOrbs(-(int)spell.ResourceCostModifiers.GetValue(2)))
             .WithSpellEvent((_, spell, _) => { DealDamage(PrimaryTarget, 9.9, 0.1, spell); });
+
+        Modifier iceBlitzDamageModifier = new Modifier(Modifier.StatModType.MultiplicativePercent, 20);
+        _iceBlitzAura = new Aura("ice-blitz", "Ice Blitz", 20, 0)
+            .WithOnApply((_, target, _) => target.DamageBuffs.AddModifier(iceBlitzDamageModifier))
+            .WithOnRemove((_, target, _) => target.DamageBuffs.RemoveModifier(iceBlitzDamageModifier));
 
         _iceBlitz = new Spell("ice-blitz", "Ice Blitz", 120, 0)
             .WithCanCastWhileCasting()
@@ -154,11 +165,7 @@ public class Rime : Unit
             .WithSpellEvent((caster, _, _) =>
             {
                 Modifier iceBlitzDamageModifier = new Modifier(Modifier.StatModType.MultiplicativePercent, 20);
-                caster.ApplyBuff(caster,
-                    new Aura("ice-blitz", "Ice Blitz", 20, 0)
-                        .WithOnApply((_, target, _) => target.DamageBuffs.AddModifier(iceBlitzDamageModifier))
-                        .WithOnRemove((_, target, _) => target.DamageBuffs.RemoveModifier(iceBlitzDamageModifier))
-                );
+                caster.ApplyBuff(caster, _iceBlitzAura);
             });
 
         _iceComet = new Spell("ice-comet", "Ice Comet", 0, 0)
@@ -221,7 +228,9 @@ public class Rime : Unit
 
     private void ConfigureTalents()
     {
-        var _chillingFinesse = new Talent("chilling-finesse", "Chilling Finesse", "1.1")
+        #region Row1
+
+        var _chillingFinesse = new Talent("chilling-finesse", "Chilling Finesse", "1A")
             .WithOnActivate((_) =>
             {
                 // Freezing Torrent Ticks reduce Bursting Ice Cooldown.
@@ -245,7 +254,7 @@ public class Rime : Unit
                 DamageBuffs.RemoveModifier(wintersEmbraceDamageBuff);
             });
 
-        var _wintersEmbrace = new Talent("winters-embrace", "Winter's Embrace", "1.2")
+        var _wintersEmbrace = new Talent("winters_embrace", "Winter's Embrace", "1B")
             .WithOnActivate((_) =>
             {
                 _burstingIceAura.OnApply += (_, _, _) => { ApplyBuff(this, wintersEmbraceBuff); };
@@ -255,7 +264,7 @@ public class Rime : Unit
         var _glacialAssault = new Talent(
                 id: "glacial-assault",
                 name: "Glacial Assault",
-                gridPos: "1.3")
+                gridPos: "1C")
             .WithOnActivate(unit =>
                 {
                     int glacialAssaultStacks = 0;
@@ -311,10 +320,83 @@ public class Rime : Unit
         Talents.Add(_wintersEmbrace);
         Talents.Add(_glacialAssault);
 
+        #endregion
+
+        #region Row2
+
+        var _burstBolter = new Talent("burst-bolter", "Burst Bolter", "2A")
+            .WithOnActivate(_ =>
+            {
+                OnDamageDealt += (_, _, _, spell, _) =>
+                {
+                    if (spell == _frostBolt)
+                    {
+                        UpdateAnima(1);
+                        DealAOEDamage(0.55, 0.1, 5, 19, _burstingIceAura);
+                        UpdateAnima(1);
+                    }
+                };
+            });
+
+        var _supremeTorrent = new Talent("supreme-torrent", "Supreme Torrent", "2B")
+            .WithOnActivate(_ =>
+            {
+                ((ChanneledSpell)_freezingTorrent).ChannelDuration.AddModifier(
+                    new Modifier(Modifier.StatModType.Flat, 0.8));
+            });
+
+        Talents.Add(_burstBolter);
+        Talents.Add(_supremeTorrent);
+
+        #endregion
+
+        #region Row3
+
+        Modifier icyFlowReduceCastTimeModifier = new Modifier(Modifier.StatModType.Flat, -0.5);
+        Modifier icyFlowCritModifier = new Modifier(Modifier.StatModType.AdditivePercent, 25);
+        Aura icyFlow = new Aura("icy-flow", "Icy Flow", 8, 0, 1)
+            .WithOnApply((_, _, _) =>
+            {
+                _glacialBlast.CastTime.AddModifier(icyFlowReduceCastTimeModifier);
+                _glacialBlast.CritModifiers.AddModifier(icyFlowCritModifier);
+                _iceComet.CritModifiers.AddModifier(icyFlowCritModifier);
+            })
+            .WithOnRemove((_, _, _) =>
+            {
+                _glacialBlast.CastTime.RemoveModifier(icyFlowReduceCastTimeModifier);
+                _glacialBlast.CritModifiers.RemoveModifier(icyFlowCritModifier);
+                _iceComet.CritModifiers.RemoveModifier(icyFlowCritModifier);
+            });
+
+        var _icyFlow = new Talent("icy-flow", "Icy Flow", "3A")
+            .WithOnActivate(_ =>
+            {
+                OnDamageDealt += (caster, _, _, spell, _) =>
+                {
+                    int icyFlowStacks = 0;
+                    int maxIcyFlowStacks = 2;
+
+                    if (spell == _coldSnap)
+                    {
+                        icyFlowStacks++;
+                        icyFlowStacks = Math.Min(icyFlowStacks, maxIcyFlowStacks);
+
+                        caster.ApplyBuff(caster, icyFlow);
+                    }
+
+                    if (spell == _glacialBlast || spell == _iceComet)
+                    {
+                        icyFlowStacks--;
+                        icyFlowStacks = Math.Max(icyFlowStacks, 0);
+                        if (icyFlowStacks == 0 && caster.HasBuff(icyFlow)) caster.RemoveBuff(caster, icyFlow);
+                    }
+                };
+            });
+
         var _avalanche = new Talent(
                 id: "avalanche",
                 name: "Avalanche",
-                gridPos: "3.2")
+                gridPos: "3B")
             .WithOnActivate(unit =>
             {
                 _iceComet.OnCast += (unit1, spell, unit2) =>
@@ -332,7 +414,7 @@ public class Rime : Unit
                 };
             });
 
-        var _coalescingFrost = new Talent("coalescing-frost", "Coalescing Frost", "3.3")
+        var _coalescingFrost = new Talent("coalescing-frost", "Coalescing Frost", "3C")
             .WithOnActivate(unit =>
             {
                 OnDamageDealt += (_, target, _, spell, crit) =>
@@ -362,7 +444,129 @@ public class Rime : Unit
                 };
             });
 
+        Talents.Add(_icyFlow);
         Talents.Add(_avalanche);
         Talents.Add(_coalescingFrost);
+
+        #endregion
+
+        #region Row4
+
+        var _greaterGlacialBlast = new Talent("greater-glacial-blast", "Greater Glacial Blast", "4B")
+            .WithOnActivate(_ =>
+            {
+                _glacialBlast.DamageModifiers.AddModifier(new Modifier(Modifier.StatModType.MultiplicativePercent,
+                    40));
+                _glacialBlast.CastTime.AddModifier(new Modifier(Modifier.StatModType.Flat, 0.5));
+            });
+
+        Talents.Add(_greaterGlacialBlast);
+
+        #endregion
+
+        #region Row5
+
+        var _cascadingBlitz = new Talent("cascading-blitz", "Cascading Blitz", "5A")
+            .WithOnActivate(_ =>
+            {
+                OnAnimaUpdate += (delta) =>
+                {
+                    for (int i = 0; i < delta; i++)
+                    {
+                        if (HasBuff(_iceBlitzAura))
+                        {
+                            _frostSwallows.TriggerSpellEvent(this, PrimaryTarget);
+                        }
+                    }
+                };
+
+                OnDamageDealt += (_, _, _, spell, _) =>
+                {
+                    if (spell == _frostSwallows)
+                    {
+                        if (HasBuff(_iceBlitzAura))
+                        {
+                            GetBuff(_iceBlitzAura).UpdateAuraExpires(0.2);
+                        }
+                    }
+                };
+            });
+
+        Modifier frostWeaversWrathCritModifier = new Modifier(Modifier.StatModType.AdditivePercent, 100);
+        Aura frostweaversWrath =
+            new Aura(id: "frostwavers-wrath", name: "Frostweavers Wrath", duration: 12, tickInterval: 0)
+                .WithOnApply((_, _, _) =>
+                {
+                    _iceComet.CritModifiers.AddModifier(frostWeaversWrathCritModifier);
+                    _glacialBlast.CritModifiers.AddModifier(frostWeaversWrathCritModifier);
+                })
+                .WithOnRemove((_, _, _) =>
+                {
+                    _iceComet.CritModifiers.RemoveModifier(frostWeaversWrathCritModifier);
+                    _glacialBlast.CritModifiers.RemoveModifier(frostWeaversWrathCritModifier);
+                });
+
+        var _frostweaversWrath = new Talent("frostweavers-wrath", "Frostweavers Wrath", "5B")
+            .WithOnActivate((unit) =>
+            {
+                OnWinterOrbUpdate += (_) =>
+                {
+                    if (!HasBuff(frostweaversWrath) && SimRandom.Roll(17))
+                    {
+                        ApplyBuff(this, frostweaversWrath);
+                    }
+                };
+
+                OnDamageDealt += (_, _, _, spell, _) =>
+                {
+                    if (spell == _iceComet || spell == _glacialBlast)
+                    {
+                        RemoveBuff(this, frostweaversWrath);
+                    }
+                };
+            });
+
+        Modifier soulFrostTickSpeed = new Modifier(Modifier.StatModType.InverseMultiplicativePercent, 40);
+        Modifier soulFrostCrit = new Modifier(Modifier.StatModType.AdditivePercent, 100);
+        Aura soulFrostTorrent = new Aura("soulfrost-torrent", "Soul Frost", 18, 0, 1);
+        soulFrostTorrent.WithOnApply((_, _, _) =>
+        {
+            _freezingTorrent.CritModifiers.AddModifier(soulFrostCrit);
+            ((ChanneledSpell)_freezingTorrent).TickInterval.AddModifier(soulFrostTickSpeed);
+        });
+        soulFrostTorrent.WithOnRemove((_, _, _) =>
+        {
+            _freezingTorrent.CritModifiers.RemoveModifier(soulFrostCrit);
+            ((ChanneledSpell)_freezingTorrent).TickInterval.RemoveModifier(soulFrostTickSpeed);
+        });
+
+        var _soulfrostTorrent = new Talent("soulfrost-torrent", "Soulfrost Torrent", "5C")
+            .WithOnActivate(unit =>
+            {
+                RPPM proc = new RPPM(1.5);
+                OnCastDone += (_, _, _) =>
+                {
+                    if (!HasBuff(soulFrostTorrent))
+                    {
+                        if (proc.TryProc(this))
+                        {
+                            ApplyBuff(this, soulFrostTorrent);
+                        }
+                    }
+                };
+
+                OnCastDone += (_, spell, _) =>
+                {
+                    if (spell == _freezingTorrent)
+                        if (HasBuff(soulFrostTorrent))
+                            RemoveBuff(this, soulFrostTorrent);
+                };
+            });
+
+        Talents.Add(_cascadingBlitz);
+        Talents.Add(_frostweaversWrath);
+        Talents.Add(_soulfrostTorrent);
+
+        #endregion
     }
 }

@@ -121,9 +121,9 @@ public class Unit
         }
     }
 
-    public void ActivateTalent(int row, int col)
+    public void ActivateTalent(string gridPos)
     {
-        var talent = Talents.FirstOrDefault(talent => talent.GridPos == $"{row}.{col}");
+        var talent = Talents.FirstOrDefault(talent => talent.GridPos == gridPos);
         if (talent != null)
         {
             talent.Activate(this);
@@ -151,6 +151,22 @@ public class Unit
             SimulationLogLevel.BuffEvents,
             $"[bold blue]{Name}[/] gains buff: [bold yellow]{aura.Name}[/]"
         );
+    }
+
+    public bool HasBuff(Aura aura)
+    {
+        return Buffs.Contains(aura);
+    }
+
+    public Aura GetBuff(Aura aura)
+    {
+        return GetBuff(aura.ID);
+    }
+
+    public Aura GetBuff(string id)
+    {
+        id = id.Replace("-", "_");
+        return Buffs.FirstOrDefault(x => x.ID == id);
     }
 
     public void RemoveBuff(Unit caster, Aura aura)

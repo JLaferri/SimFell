@@ -507,6 +507,7 @@ public static class APLParser
         string propertyNameKey;
         string comparisonPart;
 
+
         if (match.Success)
         {
             propertyNameKey = conditionText.Substring(0, match.Index).Trim();
