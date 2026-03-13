@@ -92,7 +92,7 @@ public class Unit : SimLoopListener
         ConsoleLogger.Log(SimulationLogLevel.Debug, $"Updating health from stamina");
 
         double oldMax = Health.GetMaxValue();
-        double newMax = Stamina.GetValue();
+        double newMax = Stamina.GetValue() * 1.25;
 
         // Adjust current health proportionally
         if (oldMax > 0)

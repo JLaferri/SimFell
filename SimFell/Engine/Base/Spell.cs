@@ -29,6 +29,7 @@ public class Spell
     public Action<Unit, Spell>? OnCastingCost { get; set; }
     public Action<Unit, Spell, List<Unit>>? OnTick { get; set; }
     public Func<Unit, Spell, bool>? CanCast { get; set; }
+    public Func<Unit, Spell, bool>? CanCastOverride { get; set; }
 
     //Modifiers, used typically with Talents.
     public Stat DamageModifiers { get; set; } = new Stat(0);
@@ -179,6 +180,13 @@ public class Spell
     public bool CheckCanCast(Unit caster)
     {
         UpdateCooldownAndCharges(caster);
+        // CanCastOverride bypasses the charge check (e.g. Navir's Keeper allowing Cold Snap without charges).
+        // Grants a temporary charge so CastFinished doesn't go negative.
+        if (Charges <= 0 && (CanCastOverride?.Invoke(caster, this) ?? false))
+        {
+            Charges = 1;
+            return true;
+        }
         return Charges > 0 && (CanCast?.Invoke(caster, this) ?? true);
     }
 

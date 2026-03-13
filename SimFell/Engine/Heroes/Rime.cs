@@ -59,6 +59,7 @@ public class Rime : Unit
 
     //Custom Rime Events.
     private Action<int> OnWinterOrbUpdate { get; set; }
+    private Action<int> OnWinterOrbOverflow { get; set; }
     private Action<int> OnAnimaUpdate { get; set; }
 
     public Rime() : base("Rime")
@@ -93,13 +94,18 @@ public class Rime : Unit
     {
         WinterOrbs += winterOrbsDelta;
         OnWinterOrbUpdate?.Invoke(winterOrbsDelta);
-        if (winterOrbsDelta < 0 && SimRandom.Roll(SpiritStat.GetValue() / 2))
+        if (winterOrbsDelta < 0 && SimRandom.Roll(SpiritStat.GetValue() / (1 + SpiritStat.GetValue())))
         {
             WinterOrbs += -winterOrbsDelta;
+            Spirit = Math.Min(Spirit + 2, 100);
         }
 
         if (WinterOrbs > MaxWinterOrbs)
+        {
+            int overflow = WinterOrbs - MaxWinterOrbs;
+            OnWinterOrbOverflow?.Invoke(overflow);
             ConsoleLogger.Log(SimulationLogLevel.DamageEvents, "[bold red]Over Capped Winter Orbs[/]");
+        }
         WinterOrbs = Math.Clamp(WinterOrbs, 0, MaxWinterOrbs);
     }
 
@@ -120,7 +126,7 @@ public class Rime : Unit
     private void ConfigureSpellBook()
     {
         _spiritResetChance.AddModifier(new DynamicModifier(Modifier.StatModType.AdditivePercent,
-            () => { return SpiritStat.GetValue() / 2; }));
+            () => { return SpiritStat.GetValue() / (1 + SpiritStat.GetValue()); }));
         SpiritStat.OnInvalidate += (Stat) => { _spiritResetChance.InvalidateCache(); };
 
         // Frost Bolt
@@ -128,7 +134,7 @@ public class Rime : Unit
                 castTime: 1.5f)
             .WithOnCast((unit, spell, targets) =>
             {
-                DealDamage(SimRandom.Next(2106, 2574), spell);
+                DealDamage(SimRandom.Next(2211, 2703), spell);
                 UpdateAnima(1);
             });
 
@@ -138,7 +144,7 @@ public class Rime : Unit
             .HasCharges(2)
             .WithOnCast((unit, spell, targets) =>
             {
-                DealDamage(SimRandom.Next(2736, 3344), spell);
+                DealDamage(SimRandom.Next(2873, 3511), spell);
                 UpdateWinterOrbs(1);
             });
 
@@ -147,7 +153,7 @@ public class Rime : Unit
             .IsChanneled(2, 0.4f)
             .WithOnTick((unit, spell, targets) =>
             {
-                DealDamage(SimRandom.Next(1278, 1562), spell);
+                DealDamage(SimRandom.Next(1406, 1718), spell);
                 UpdateAnima(1);
             });
 
@@ -216,7 +222,7 @@ public class Rime : Unit
         _iceComet = new Spell("ice-comet", "Ice Comet", 0, 0)
             .WithCanCast(((unit, spell) => WinterOrbs >= 2))
             .WithOnCastingCost((caster, spell) => UpdateWinterOrbs(-(int)(spell.ResourceCostModifiers.GetValue(2))))
-            .WithOnCast((unit, spell, targets) => { DealAOEDamage(SimRandom.Next(4059, 4961), 8, spell); });
+            .WithOnCast((unit, spell, targets) => { DealAOEDamage(SimRandom.Next(4059, 4961), 12, spell); });
 
         // Ice Blitz
         Modifier iceBlitzBonusDamage = new Modifier(Modifier.StatModType.MultiplicativePercent, 20);
@@ -397,6 +403,8 @@ public class Rime : Unit
 
                         if (spell == _glacialBlast && caster.HasBuff(glacialAssaultAura))
                         {
+                            // Glacial Blast explodes on impact, dealing 10% of initial damage to nearby enemies.
+                            DealAOEDamage(damage * 0.10, 12, spell, false);
                             caster.RemoveBuff(glacialAssaultAura);
                         }
                     };
@@ -458,12 +466,42 @@ public class Rime : Unit
             });
 
         // Navir's Keeper
+        Aura navirsKeeperBuff = new Aura(
+            id: "navirs-keeper",
+            name: "Navir's Keeper",
+            duration: 99999,
+            tickInterval: 0,
+            maxStacks: 2);
+
         _navirsKeeper = new Talent(
                 id: "navirs-keeper",
                 name: "Navirs Keeper",
                 gridPos: "2.3")
             .WithOnActivate(unit =>
-                _flightOfTheNavir.OnCast += (unit1, spell, arg3) => _coldSnap.SetCurrentCharges(unit1, 2));
+            {
+                // Flight of the Navir grants 2 stacks of Navir's Keeper.
+                _flightOfTheNavir.OnCast += (unit1, spell, arg3) =>
+                {
+                    if (!unit1.HasBuff(navirsKeeperBuff))
+                        unit1.ApplyBuff(unit1, unit1, navirsKeeperBuff);
+                    else
+                        navirsKeeperBuff.IncreaseStack();
+                };
+
+                // Allow Cold Snap to be cast without charges when Navir's Keeper stacks are available.
+                _coldSnap.CanCastOverride = (u, s) => u.HasBuff(navirsKeeperBuff);
+
+                // When Cold Snap is cast with no charges, consume a Navir's Keeper stack.
+                _coldSnap.OnCast += (unit1, spell, targets) =>
+                {
+                    if (unit1.HasBuff(navirsKeeperBuff))
+                    {
+                        navirsKeeperBuff.DecreaseStack();
+                        if (navirsKeeperBuff.CurrentStacks <= 0)
+                            unit1.RemoveBuff(navirsKeeperBuff);
+                    }
+                };
+            });
 
         Talents.Add(_burstBolter);
         Talents.Add(_talonsEdict);
@@ -736,6 +774,13 @@ public class Rime : Unit
                     _iceBlitz.UpdateCooldown(this, 0.3 * delta);
                     _flightOfTheNavir.UpdateCooldown(this, 0.3 * delta);
                     _wintersBlessing.UpdateCooldown(this, 0.3 * delta);
+                };
+
+                OnWinterOrbOverflow += (overflow) =>
+                {
+                    _iceBlitz.UpdateCooldown(this, 0.3 * overflow);
+                    _flightOfTheNavir.UpdateCooldown(this, 0.3 * overflow);
+                    _wintersBlessing.UpdateCooldown(this, 0.3 * overflow);
                 };
             });
 
